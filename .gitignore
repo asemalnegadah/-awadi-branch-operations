@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+.next/
+out/
+dist/
+coverage/
+.wrangler/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases and exports
+*.sqlite
+*.sqlite3
+*.db
+exports/
+backups/
+uploads/
+
+# Operational/customer data must never enter Git
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.zip
+*.7z
+*.rar
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
