@@ -10,7 +10,9 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run build"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "engines": {
     "node": ">=20.9.0"
@@ -27,6 +29,7 @@
     "@types/react-dom": "^19.2.2",
     "eslint": "^9.39.0",
     "eslint-config-next": "16.2.10",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "4.1.9"
   }
 }
