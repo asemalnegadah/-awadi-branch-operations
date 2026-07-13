@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Build and coverage
+coverage/
+dist/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Cloudflare and local tooling
+.wrangler/
+.dev.vars
+
+# Operational data must never enter Git
+private-data/
+uploads/
+backups/
+exports/
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.zip
