@@ -42,11 +42,9 @@ function existingCustomer(overrides: Partial<CustomerRecord> = {}): CustomerReco
     id: "33333333-3333-4333-8333-333333333333",
     customerNumber: "60001",
     tradeNameAr: "متجر النور",
-    ownerNameAr: undefined,
     customerType: "RETAIL",
     lifecycleStatus: "ACTIVE",
     creditStatus: "ALLOWED",
-    notes: undefined,
     phones: ["967777111222"],
     externalIdentifiers: [
       { sourceSystem: "ONYX", externalIdentifier: "60001" },
