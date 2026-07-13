@@ -7,12 +7,14 @@ import {
 
 export interface CustomerIdentityInput {
   readonly tradeNameAr: string;
-  readonly customerNumber?: string;
-  readonly phones?: readonly string[];
-  readonly externalIdentifiers?: readonly {
-    sourceSystem: string;
-    externalIdentifier: string;
-  }[];
+  readonly customerNumber?: string | undefined;
+  readonly phones?: readonly string[] | undefined;
+  readonly externalIdentifiers?:
+    | readonly {
+        sourceSystem: string;
+        externalIdentifier: string;
+      }[]
+    | undefined;
 }
 
 export type DuplicateSignal =
@@ -99,7 +101,10 @@ function hasMatchingExternalIdentifier(
   incoming: CustomerIdentityInput,
   existing: CustomerIdentityInput,
 ): boolean {
-  if (!incoming.externalIdentifiers?.length || !existing.externalIdentifiers?.length) {
+  if (
+    !incoming.externalIdentifiers?.length ||
+    !existing.externalIdentifiers?.length
+  ) {
     return false;
   }
 
