@@ -84,22 +84,23 @@ export function createRegisterCustomerService({
     const identityCandidates = await repository.findIdentityCandidates(input);
 
     const duplicateCandidates = identityCandidates
-      .map((candidate) => {
+      .flatMap((candidate): DuplicateCandidateResult[] => {
         const screening = screenPotentialDuplicate(input, candidate);
 
-        return {
-          customerId: candidate.id,
-          tradeNameAr: candidate.tradeNameAr,
-          score: screening.score,
-          signals: screening.signals,
-          requiresHumanReview: screening.requiresHumanReview,
-        };
+        if (!screening.requiresHumanReview) {
+          return [];
+        }
+
+        return [
+          Object.freeze({
+            customerId: candidate.id,
+            tradeNameAr: candidate.tradeNameAr,
+            score: screening.score,
+            signals: screening.signals,
+          }),
+        ];
       })
-      .filter((candidate) => candidate.requiresHumanReview)
-      .sort((left, right) => right.score - left.score)
-      .map(({ requiresHumanReview: _requiresHumanReview, ...candidate }) =>
-        Object.freeze(candidate),
-      );
+      .sort((left, right) => right.score - left.score);
 
     if (duplicateCandidates.length > 0) {
       return Object.freeze({
