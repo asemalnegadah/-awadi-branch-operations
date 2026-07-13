@@ -19,8 +19,9 @@ class InMemoryCustomerRepository implements CustomerRegistrationRepository {
   }
 
   async findIdentityCandidates(
-    _identity: CustomerIdentityInput,
+    identity: CustomerIdentityInput,
   ): Promise<readonly CustomerRecord[]> {
+    void identity;
     return this.customers;
   }
 
