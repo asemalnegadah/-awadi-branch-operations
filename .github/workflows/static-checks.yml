@@ -37,14 +37,20 @@ jobs:
         run: npm run lint
 
       - name: Typecheck
-        id: typecheck
-        continue-on-error: true
-        run: npm run typecheck -- --pretty false > typecheck.log 2>&1
+        run: |
+          set +e
+          npm run typecheck -- --pretty false > typecheck.log 2>&1
+          code=$?
+          echo "${code}" > typecheck.exit
+          exit 0
 
       - name: Unit tests
-        id: unit_tests
-        continue-on-error: true
-        run: npm run test -- --reporter=verbose > unit-tests.log 2>&1
+        run: |
+          set +e
+          npm run test -- --reporter=verbose > unit-tests.log 2>&1
+          code=$?
+          echo "${code}" > unit-tests.exit
+          exit 0
 
       - name: Upload diagnostics
         if: always()
@@ -53,13 +59,18 @@ jobs:
           name: static-unit-diagnostics
           path: |
             typecheck.log
+            typecheck.exit
             unit-tests.log
+            unit-tests.exit
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail when checks failed
-        if: steps.typecheck.outcome == 'failure' || steps.unit_tests.outcome == 'failure'
+      - name: Enforce check results
         run: |
-          cat typecheck.log
-          cat unit-tests.log
-          exit 1
+          typecheck_code="$(cat typecheck.exit)"
+          unit_code="$(cat unit-tests.exit)"
+          if [ "${typecheck_code}" != "0" ] || [ "${unit_code}" != "0" ]; then
+            cat typecheck.log
+            cat unit-tests.log
+            exit 1
+          fi
