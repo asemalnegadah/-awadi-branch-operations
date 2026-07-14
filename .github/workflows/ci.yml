@@ -18,9 +18,24 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, typecheck, test, and build
+    name: Lint, typecheck, test, migrations, and build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: awadi_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d awadi_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout repository
@@ -42,6 +57,43 @@ jobs:
 
       - name: Test
         run: npm run test
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Apply PostgreSQL migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          for migration in db/migrations/*.sql; do
+            echo "Applying ${migration}"
+            psql \
+              --host localhost \
+              --port 5432 \
+              --username postgres \
+              --dbname awadi_test \
+              --set ON_ERROR_STOP=1 \
+              --file "${migration}"
+          done
+
+      - name: Run PostgreSQL integrity tests
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          for test_file in db/tests/*.sql; do
+            echo "Running ${test_file}"
+            psql \
+              --host localhost \
+              --port 5432 \
+              --username postgres \
+              --dbname awadi_test \
+              --set ON_ERROR_STOP=1 \
+              --file "${test_file}"
+          done
 
       - name: Build
         run: npm run build
