@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useState } from "react";
 
 interface LoginApiResponse {
@@ -83,6 +84,10 @@ export function LoginForm() {
       <button className="primary-button" type="submit" disabled={submitting}>
         {submitting ? "جارٍ التحقق…" : "تسجيل الدخول"}
       </button>
+
+      <Link className="auth-text-link" href="/forgot-password">
+        نسيت كلمة المرور أو لم أفعّل الحساب
+      </Link>
     </form>
   );
 }
