@@ -40,6 +40,11 @@ DECLARE
   test_session_id uuid := gen_random_uuid();
   test_attempt_id uuid := gen_random_uuid();
   test_request_id uuid := gen_random_uuid();
+  test_representative_id uuid := gen_random_uuid();
+  test_customer_id uuid := gen_random_uuid();
+  test_account_id uuid := gen_random_uuid();
+  test_collection_id uuid := gen_random_uuid();
+  latest_metadata jsonb;
 BEGIN
   INSERT INTO users (
     id,
@@ -61,6 +66,10 @@ BEGIN
   SELECT test_user_id, id, test_user_id
   FROM roles
   WHERE code = 'BRANCH_MANAGER';
+
+  IF NOT is_single_manager_actor(test_user_id) THEN
+    RAISE EXCEPTION 'active branch manager must be recognized in SINGLE_MANAGER mode';
+  END IF;
 
   INSERT INTO user_sessions (
     id,
@@ -127,6 +136,135 @@ BEGIN
       IF SQLERRM = 'auth_login_attempts update should have failed' THEN
         RAISE;
       END IF;
+  END;
+
+  INSERT INTO sales_representatives (
+    id,
+    employee_code,
+    full_name_ar,
+    user_id,
+    created_by,
+    updated_by
+  ) VALUES (
+    test_representative_id,
+    'AUTH-SMOKE',
+    'مندوب اختبار الاعتماد الذاتي',
+    test_user_id,
+    test_user_id,
+    test_user_id
+  );
+
+  INSERT INTO customers (
+    id,
+    customer_number,
+    trade_name_ar,
+    created_by,
+    updated_by
+  ) VALUES (
+    test_customer_id,
+    'AUTH-SMOKE-CUSTOMER',
+    'عميل اختبار الاعتماد الذاتي',
+    test_user_id,
+    test_user_id
+  );
+
+  INSERT INTO customer_accounts (
+    id,
+    customer_id,
+    currency_code,
+    created_by
+  ) VALUES (
+    test_account_id,
+    test_customer_id,
+    'SR',
+    test_user_id
+  );
+
+  PERFORM set_config('app.request_id', test_request_id::text, true);
+
+  INSERT INTO collections (
+    id,
+    customer_id,
+    customer_account_id,
+    representative_id,
+    currency_code,
+    amount_minor,
+    payment_method,
+    collected_at,
+    receipt_number,
+    created_by,
+    updated_by,
+    idempotency_key
+  ) VALUES (
+    test_collection_id,
+    test_customer_id,
+    test_account_id,
+    test_representative_id,
+    'SR',
+    10000,
+    'CASH',
+    now(),
+    'AUTH-SMOKE-RECEIPT',
+    test_user_id,
+    test_user_id,
+    'AUTH-SMOKE-COLLECTION'
+  );
+
+  UPDATE collections
+  SET state = 'SUBMITTED', updated_by = test_user_id
+  WHERE id = test_collection_id;
+
+  UPDATE collections
+  SET state = 'REVIEWED',
+      reviewed_at = now(),
+      reviewed_by = test_user_id,
+      updated_by = test_user_id
+  WHERE id = test_collection_id;
+
+  UPDATE collections
+  SET state = 'APPROVED',
+      approved_at = now(),
+      approved_by = test_user_id,
+      updated_by = test_user_id
+  WHERE id = test_collection_id;
+
+  UPDATE collections
+  SET state = 'CASH_RECEIVED',
+      cash_received_at = now(),
+      cash_received_by = test_user_id,
+      updated_by = test_user_id
+  WHERE id = test_collection_id;
+
+  SELECT metadata
+  INTO latest_metadata
+  FROM collection_state_history
+  WHERE collection_id = test_collection_id
+    AND to_state = 'CASH_RECEIVED'
+  ORDER BY changed_at DESC
+  LIMIT 1;
+
+  IF latest_metadata->>'operating_mode' <> 'SINGLE_MANAGER'
+     OR latest_metadata->>'self_approved' <> 'true' THEN
+    RAISE EXCEPTION 'self-approved manager transition must be explicitly audited';
+  END IF;
+
+  UPDATE organization_settings
+  SET operating_mode = 'MULTI_USER'
+  WHERE singleton_id = 1;
+
+  BEGIN
+    UPDATE collections
+    SET state = 'REVERSED',
+        reversed_at = now(),
+        reversed_by = test_user_id,
+        reversal_reason = 'MULTI_USER_NEGATIVE_TEST',
+        updated_by = test_user_id
+    WHERE id = test_collection_id;
+
+    RAISE EXCEPTION 'MULTI_USER self-approval guard should have failed earlier';
+  EXCEPTION
+    WHEN OTHERS THEN
+      NULL;
   END;
 END;
 $$;
