@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 
 import { loginPostgres } from "@/lib/auth/postgres-auth-service";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session-token";
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
 
   try {
-    const payload: unknown = await request.json();
+    const payload: unknown = await request.json().catch(() => null);
     const parsed = loginSchema.safeParse(payload);
     if (!parsed.success) {
       return json(
