@@ -134,8 +134,10 @@ export async function extractPositionedTextWithPdfJs(
       page.cleanup();
     }
 
+    const minimumUsefulCharacters = Math.max(5, pdf.numPages * 3);
     const requiresOcr =
-      pdf.numPages > 0 && visibleCharacterCount < pdf.numPages * 20;
+      pdf.numPages > 0 &&
+      (items.length === 0 || visibleCharacterCount < minimumUsefulCharacters);
     const warnings = requiresOcr
       ? ["لا يحتوي PDF على نص كافٍ؛ يحتاج إلى OCR قبل استخراج الصفوف."]
       : [];
