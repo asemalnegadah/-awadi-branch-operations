@@ -84,9 +84,12 @@ try {
       FOR UPDATE OF user_account
     `;
 
-    if (!existing && activeManagerRows.length > 0) {
+    const conflictingManager = activeManagerRows.find(
+      (manager) => !existing || manager.id !== existing.id,
+    );
+    if (conflictingManager) {
       throw new Error(
-        "An active branch manager already exists. Refusing to create a second manager in SINGLE_MANAGER mode.",
+        "Another active branch manager already exists. Refusing to create or reset a second manager in SINGLE_MANAGER mode.",
       );
     }
 
@@ -150,8 +153,16 @@ try {
 
     await transaction`
       INSERT INTO user_roles (user_id, role_id, granted_by)
-      VALUES (${userId}, ${managerRole.id}, ${userId})
-      ON CONFLICT (user_id, role_id, valid_from) DO NOTHING
+      SELECT ${userId}, ${managerRole.id}, ${userId}
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM user_roles
+        WHERE user_id = ${userId}
+          AND role_id = ${managerRole.id}
+          AND revoked_at IS NULL
+          AND valid_from <= now()
+          AND (valid_until IS NULL OR valid_until > now())
+      )
     `;
 
     await transaction`
