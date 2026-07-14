@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { requirePermission } from "@/lib/auth/authorization";
 import { requireCurrentSession } from "@/lib/auth/current-session";
@@ -33,7 +34,12 @@ export default async function DashboardPage() {
             والصلاحيات من الخادم.
           </p>
         </div>
-        <LogoutButton />
+        <div className="dashboard-actions">
+          <Link className="secondary-button button-link" href="/settings/security">
+            أمان الحساب
+          </Link>
+          <LogoutButton />
+        </div>
       </header>
 
       <section className="grid dashboard-grid" aria-label="حالة الحساب">
