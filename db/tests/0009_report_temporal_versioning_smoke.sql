@@ -79,9 +79,16 @@ BEGIN
     DATE '2026-07-05',
     TIMESTAMPTZ '2026-07-05 02:01:48+03',
     'FIRST_SNAPSHOT',
-    'CURRENT',
+    'CANDIDATE',
     actor_id
   ) RETURNING id INTO first_snapshot_id;
+
+  UPDATE report_snapshots
+  SET snapshot_status = 'CURRENT',
+      reviewed_at = now(),
+      reviewed_by = actor_id,
+      review_note = 'اعتماد أول نسخة'
+  WHERE id = first_snapshot_id;
 
   INSERT INTO uploaded_files (
     original_name,
@@ -157,7 +164,10 @@ BEGIN
 
   BEGIN
     UPDATE report_snapshots
-    SET snapshot_status = 'CURRENT'
+    SET snapshot_status = 'CURRENT',
+        reviewed_at = now(),
+        reviewed_by = actor_id,
+        review_note = 'محاولة قبل أرشفة النسخة السابقة'
     WHERE id = second_snapshot_id;
     RAISE EXCEPTION 'expected second current snapshot to be rejected while first remains current';
   EXCEPTION WHEN unique_violation THEN
@@ -165,10 +175,7 @@ BEGIN
   END;
 
   UPDATE report_snapshots
-  SET snapshot_status = 'HISTORICAL',
-      reviewed_at = now(),
-      reviewed_by = actor_id,
-      review_note = 'استبدلت بنسخة أحدث'
+  SET snapshot_status = 'HISTORICAL'
   WHERE id = first_snapshot_id;
 
   UPDATE report_snapshots
