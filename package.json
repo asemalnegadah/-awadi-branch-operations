@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "engines": {
@@ -19,6 +20,7 @@
   },
   "dependencies": {
     "next": "16.2.10",
+    "postgres": "^3.4.7",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "zod": "^4.1.12"
