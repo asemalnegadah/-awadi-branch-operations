@@ -1,6 +1,7 @@
 export const agingBucketCodes = [
   "NOT_DUE",
   "DAYS_0_30",
+  "DAYS_1_30",
   "DAYS_31_60",
   "DAYS_61_90",
   "DAYS_91_120",
@@ -79,14 +80,14 @@ export const standard180DayAgingScheme: AgingScheme = Object.freeze({
     Object.freeze({
       code: "NOT_DUE",
       minimumDays: null,
-      maximumDays: -1,
+      maximumDays: 0,
       sourceLabels: Object.freeze(["غير مستحق"]),
     }),
     Object.freeze({
-      code: "DAYS_0_30",
-      minimumDays: 0,
+      code: "DAYS_1_30",
+      minimumDays: 1,
       maximumDays: 30,
-      sourceLabels: Object.freeze(["0 - 30", "0-30", "30 - 0"]),
+      sourceLabels: Object.freeze(["1 - 30", "1-30", "30 - 1"]),
     }),
     Object.freeze({
       code: "DAYS_31_60",
