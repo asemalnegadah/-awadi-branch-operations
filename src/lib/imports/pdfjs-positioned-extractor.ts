@@ -58,9 +58,7 @@ export async function extractPositionedTextWithPdfJs(
     stopAtErrors: false,
   });
 
-  let pdf:
-    | Awaited<ReturnType<typeof loadingTask.promise.then>>
-    | undefined;
+  let pdf: Awaited<typeof loadingTask.promise> | undefined;
 
   try {
     pdf = await loadingTask.promise;
