@@ -214,8 +214,8 @@ BEGIN
   FROM collection_state_history
   WHERE collection_id = collection_id_value;
 
-  IF history_count <> 5 THEN
-    RAISE EXCEPTION 'expected 5 collection history rows, got %', history_count;
+  IF history_count <> 6 THEN
+    RAISE EXCEPTION 'expected 6 collection history rows, got %', history_count;
   END IF;
 
   BEGIN
