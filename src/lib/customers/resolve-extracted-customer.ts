@@ -407,19 +407,44 @@ function isLikelyTruncatedPrefix(
 ): boolean {
   if (
     extractedNormalized.length < 4 ||
-    extractedNormalized.length >= canonicalNormalized.length
+    extractedNormalized.length >= canonicalNormalized.length ||
+    !canonicalNormalized.startsWith(extractedNormalized)
   ) {
     return false;
   }
 
-  if (!canonicalNormalized.startsWith(extractedNormalized)) {
+  const nextCharacter = canonicalNormalized.at(extractedNormalized.length);
+  if (nextCharacter === " ") {
+    return true;
+  }
+
+  const extractedTokens = extractedNormalized.split(" ").filter(Boolean);
+  const canonicalTokens = canonicalNormalized.split(" ").filter(Boolean);
+
+  if (
+    extractedTokens.length < 2 ||
+    extractedTokens.length > canonicalTokens.length
+  ) {
     return false;
   }
 
-  const nextCharacter = canonicalNormalized.at(extractedNormalized.length);
-  const extractedTokenCount = extractedNormalized.split(" ").filter(Boolean).length;
+  const lastIndex = extractedTokens.length - 1;
+  for (let index = 0; index < lastIndex; index += 1) {
+    if (extractedTokens[index] !== canonicalTokens[index]) {
+      return false;
+    }
+  }
 
-  return nextCharacter === " " || extractedTokenCount >= 2;
+  const extractedLastToken = extractedTokens[lastIndex];
+  const canonicalLastToken = canonicalTokens[lastIndex];
+
+  return Boolean(
+    extractedLastToken &&
+      canonicalLastToken &&
+      extractedLastToken.length >= 2 &&
+      extractedLastToken.length < canonicalLastToken.length &&
+      canonicalLastToken.startsWith(extractedLastToken),
+  );
 }
 
 function calculateConfidence(signals: readonly CustomerMatchSignal[]): number {
