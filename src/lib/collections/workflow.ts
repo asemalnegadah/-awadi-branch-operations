@@ -40,6 +40,7 @@ export function createCollectionDraft(
   assertRequiredText(input.customerAccountId, "customerAccountId");
   assertRequiredText(input.representativeId, "representativeId");
   assertRequiredText(input.createdBy, "createdBy");
+  assertPositiveMinorUnits(input.amountMinor);
   assertIsoDateTime(input.collectedAt, "collectedAt");
   assertIsoDateTime(input.createdAt, "createdAt");
 
@@ -216,6 +217,12 @@ function hasEvidence(evidence: CollectionEvidence): boolean {
 function normalizeOptionalText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function assertPositiveMinorUnits(value: number): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("يجب أن يكون مبلغ التحصيل عددًا صحيحًا موجبًا بالوحدة الصغرى.");
+  }
 }
 
 function assertReason(reason: string | undefined): void {
