@@ -19,11 +19,56 @@ const authEnvSchema = z.object({
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24).default(8),
 });
 
+const passwordRecoveryEnvSchema = z
+  .object({
+    AUTH_SECRET: z
+      .string()
+      .min(32, "AUTH_SECRET must contain at least 32 characters"),
+    APP_BASE_URL: z.string().url(),
+    RESEND_API_KEY: z.string().trim().min(1),
+    EMAIL_FROM: z.string().trim().min(3).refine((value) => value.includes("@"), {
+      message: "EMAIL_FROM must contain an email address",
+    }),
+    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(10).max(60).default(30),
+    PASSWORD_RESET_EMAIL_MAX_PER_HOUR: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10)
+      .default(3),
+    PASSWORD_RESET_IP_MAX_PER_HOUR: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .default(10),
+    ALLOW_INITIAL_MANAGER_EMAIL_BOOTSTRAP: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    INITIAL_MANAGER_EMAIL: z.string().trim().email().optional(),
+    INITIAL_MANAGER_NAME: z.string().trim().min(2).max(200).optional(),
+  })
+  .superRefine((value, context) => {
+    if (
+      value.ALLOW_INITIAL_MANAGER_EMAIL_BOOTSTRAP &&
+      (!value.INITIAL_MANAGER_EMAIL || !value.INITIAL_MANAGER_NAME)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "INITIAL_MANAGER_EMAIL and INITIAL_MANAGER_NAME are required when initial manager email bootstrap is enabled",
+      });
+    }
+  });
+
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 export type AuthEnv = z.infer<typeof authEnvSchema>;
+export type PasswordRecoveryEnv = z.infer<typeof passwordRecoveryEnvSchema>;
 
 let cachedEnv: ServerEnv | undefined;
 let cachedAuthEnv: AuthEnv | undefined;
+let cachedPasswordRecoveryEnv: PasswordRecoveryEnv | undefined;
 
 export function getServerEnv(
   environment: NodeJS.ProcessEnv = process.env,
@@ -57,7 +102,29 @@ export function getAuthEnv(
   return parsed;
 }
 
+export function getPasswordRecoveryEnv(
+  environment: NodeJS.ProcessEnv = process.env,
+): PasswordRecoveryEnv {
+  if (environment === process.env && cachedPasswordRecoveryEnv) {
+    return cachedPasswordRecoveryEnv;
+  }
+
+  const parsed = passwordRecoveryEnvSchema.parse(environment);
+  const baseUrl = new URL(parsed.APP_BASE_URL);
+
+  if (environment.NODE_ENV === "production" && baseUrl.protocol !== "https:") {
+    throw new Error("APP_BASE_URL must use HTTPS in production.");
+  }
+
+  if (environment === process.env) {
+    cachedPasswordRecoveryEnv = Object.freeze(parsed);
+  }
+
+  return parsed;
+}
+
 export function resetServerEnvForTests(): void {
   cachedEnv = undefined;
   cachedAuthEnv = undefined;
+  cachedPasswordRecoveryEnv = undefined;
 }
