@@ -8,6 +8,7 @@ import { AuthenticationError } from "@/lib/auth/types";
 import { getAuthEnv } from "@/lib/config/server-env";
 import { getDatabaseClient } from "@/lib/db/client";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
+import { isSameOriginWrite } from "@/lib/http/same-origin";
 
 export const runtime = "nodejs";
 
@@ -28,8 +29,12 @@ const inputSchema = z
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
-  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
+  if (!isSameOriginWrite(request)) {
+    return createResponse(false, 403, context.requestId, "تم رفض مصدر الطلب.");
+  }
+
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
     return createResponse(false, 401, context.requestId, "يجب تسجيل الدخول أولًا.");
   }
