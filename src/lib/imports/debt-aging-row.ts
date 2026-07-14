@@ -2,19 +2,17 @@ import { z } from "zod";
 
 import { assertCurrencyCode, type CurrencyCode } from "@/lib/domain/currency";
 
+import {
+  agingBucketCodes,
+  deriveAgingBucketForScheme,
+  parseAgingBucketForScheme,
+  type AgingBucketCode,
+  type AgingSchemeCode,
+} from "./aging-scheme";
 import { parseLocalizedMoneyToMinor } from "./localized-number";
 
-export const agingBuckets = [
-  "NOT_DUE",
-  "DAYS_1_30",
-  "DAYS_31_60",
-  "DAYS_61_90",
-  "DAYS_91_180",
-  "OVER_180",
-  "UNKNOWN",
-] as const;
-
-export type AgingBucket = (typeof agingBuckets)[number];
+export const agingBuckets = agingBucketCodes;
+export type AgingBucket = AgingBucketCode;
 
 export const rawDebtAgingRowSchema = z.object({
   customerNumber: z.string().trim().optional(),
@@ -47,6 +45,7 @@ export interface NormalizedDebtAgingRow {
   readonly dueDate?: string | undefined;
   readonly ageDays?: number | undefined;
   readonly agingBucket: AgingBucket;
+  readonly agingScheme: AgingSchemeCode;
   readonly sourcePage: number;
   readonly sourceRow: number;
   readonly confidence: number;
@@ -56,15 +55,20 @@ export interface NormalizedDebtAgingRow {
 export function normalizeDebtAgingRow(
   rawInput: unknown,
   decimalPlaces = 2,
+  agingScheme: AgingSchemeCode = "STANDARD_0_30_60_90_180",
 ): NormalizedDebtAgingRow {
   const raw = rawDebtAgingRowSchema.parse(rawInput);
   const warnings: string[] = [];
   const currency = assertCurrencyCode(raw.currency.toUpperCase());
   const ageDays = parseOptionalAgeDays(raw.ageDays);
-  const derivedBucket = deriveAgingBucket(ageDays);
-  const statedBucket = parseAgingBucket(raw.agingBucket);
+  const derivedBucket = deriveAgingBucketForScheme(ageDays, agingScheme);
+  const statedBucket = parseAgingBucketForScheme(raw.agingBucket, agingScheme);
 
-  if (statedBucket !== "UNKNOWN" && derivedBucket !== "UNKNOWN" && statedBucket !== derivedBucket) {
+  if (
+    statedBucket !== "UNKNOWN" &&
+    derivedBucket !== "UNKNOWN" &&
+    statedBucket !== derivedBucket
+  ) {
     warnings.push("تصنيف عمر الدين في الملف لا يطابق العمر المحسوب.");
   }
 
@@ -89,8 +93,16 @@ export function normalizeDebtAgingRow(
     warnings.push("الرصيد المتبقي أكبر من المبلغ الأصلي.");
   }
 
-  const invoiceDate = parseOptionalIsoDate(raw.invoiceDate, "تاريخ الفاتورة", warnings);
-  const dueDate = parseOptionalIsoDate(raw.dueDate, "تاريخ الاستحقاق", warnings);
+  const invoiceDate = parseOptionalIsoDate(
+    raw.invoiceDate,
+    "تاريخ الفاتورة",
+    warnings,
+  );
+  const dueDate = parseOptionalIsoDate(
+    raw.dueDate,
+    "تاريخ الاستحقاق",
+    warnings,
+  );
 
   return Object.freeze({
     customerNumber: normalizeOptional(raw.customerNumber),
@@ -104,6 +116,7 @@ export function normalizeDebtAgingRow(
     dueDate,
     ageDays,
     agingBucket: derivedBucket !== "UNKNOWN" ? derivedBucket : statedBucket,
+    agingScheme,
     sourcePage: raw.sourcePage,
     sourceRow: raw.sourceRow,
     confidence: raw.confidence,
@@ -111,69 +124,27 @@ export function normalizeDebtAgingRow(
   });
 }
 
-export function deriveAgingBucket(ageDays: number | undefined): AgingBucket {
-  if (ageDays === undefined) {
-    return "UNKNOWN";
-  }
-
-  if (ageDays <= 0) {
-    return "NOT_DUE";
-  }
-
-  if (ageDays <= 30) {
-    return "DAYS_1_30";
-  }
-
-  if (ageDays <= 60) {
-    return "DAYS_31_60";
-  }
-
-  if (ageDays <= 90) {
-    return "DAYS_61_90";
-  }
-
-  if (ageDays <= 180) {
-    return "DAYS_91_180";
-  }
-
-  return "OVER_180";
+export function deriveAgingBucket(
+  ageDays: number | undefined,
+  agingScheme: AgingSchemeCode = "STANDARD_0_30_60_90_180",
+): AgingBucket {
+  return deriveAgingBucketForScheme(ageDays, agingScheme);
 }
 
-function parseOptionalAgeDays(value: string | number | undefined): number | undefined {
+function parseOptionalAgeDays(
+  value: string | number | undefined,
+): number | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
 
-  const parsed = typeof value === "number" ? value : Number(value.replace(/\s+/g, ""));
+  const parsed =
+    typeof value === "number" ? value : Number(value.replace(/\s+/g, ""));
   if (!Number.isInteger(parsed) || parsed < -3650 || parsed > 36500) {
     throw new Error("عمر الدين المستخرج غير صالح.");
   }
 
   return parsed;
-}
-
-function parseAgingBucket(value: string | undefined): AgingBucket {
-  if (!value) {
-    return "UNKNOWN";
-  }
-
-  const normalized = value
-    .normalize("NFKC")
-    .replace(/[أإآٱ]/g, "ا")
-    .replace(/ى/g, "ي")
-    .replace(/ة/g, "ه")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .toLowerCase();
-
-  if (normalized.includes("غير مستحق")) return "NOT_DUE";
-  if (normalized.includes("1 30") || normalized.includes("1-30")) return "DAYS_1_30";
-  if (normalized.includes("31 60") || normalized.includes("31-60")) return "DAYS_31_60";
-  if (normalized.includes("61 90") || normalized.includes("61-90")) return "DAYS_61_90";
-  if (normalized.includes("91 180") || normalized.includes("91-180")) return "DAYS_91_180";
-  if (normalized.includes("اكثر من 180") || normalized.includes("180+")) return "OVER_180";
-
-  return "UNKNOWN";
 }
 
 function parseOptionalIsoDate(
