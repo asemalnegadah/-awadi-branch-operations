@@ -1,0 +1,59 @@
+name: Temporary Cloudflare dependency resolver
+
+on:
+  push:
+    branches:
+      - agent/cloudflare-production-readiness
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cloudflare-dependency-resolver
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/cloudflare-production-readiness
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Cloudflare adapter and Wrangler
+        run: |
+          npm install --save-exact @opennextjs/cloudflare@latest
+          npm install --save-dev --save-exact wrangler@latest
+
+      - name: Add Cloudflare scripts
+        shell: node {0}
+        run: |
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.scripts['cf:build'] = 'opennextjs-cloudflare build';
+          pkg.scripts['cf:preview'] = 'npm run cf:build && opennextjs-cloudflare preview';
+          pkg.scripts['cf:deploy'] = 'npm run cf:build && opennextjs-cloudflare deploy';
+          pkg.scripts['cf:typegen'] = 'wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts';
+          pkg.scripts['cf:dry-run'] = 'npm run cf:build && wrangler deploy --dry-run --outdir .wrangler/dry-run';
+          fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
+
+      - name: Commit resolved versions
+        run: |
+          git config user.name "ChatGPT engineering agent"
+          git config user.email "actions@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "build: add pinned Cloudflare OpenNext toolchain"
+          git push origin HEAD:agent/cloudflare-production-readiness
