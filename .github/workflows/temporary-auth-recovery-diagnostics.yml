@@ -1,0 +1,47 @@
+name: Temporary auth recovery diagnostics
+
+on:
+  push:
+    branches:
+      - agent/email-password-recovery
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Capture lint output
+        shell: bash
+        run: |
+          mkdir -p diagnostics
+          set +e
+          npm run lint > diagnostics/lint.txt 2>&1
+          echo $? > diagnostics/lint-exit-code.txt
+          npm run typecheck > diagnostics/typecheck.txt 2>&1
+          echo $? > diagnostics/typecheck-exit-code.txt
+          npm run test > diagnostics/unit-tests.txt 2>&1
+          echo $? > diagnostics/unit-tests-exit-code.txt
+          exit 0
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-recovery-diagnostics
+          path: diagnostics
+          if-no-files-found: error
+          retention-days: 1
