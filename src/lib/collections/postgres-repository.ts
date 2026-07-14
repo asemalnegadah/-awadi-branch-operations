@@ -156,7 +156,7 @@ export async function createCollectionDraftPostgres(
     }
 
     const existingCollection = mapCollectionRow(existing);
-    if (!sameDraft(existingCollection, draft)) {
+    if (!sameBusinessDraft(existingCollection, draft)) {
       throw new IdempotencyConflictError();
     }
 
@@ -220,9 +220,11 @@ function mapCollectionRow(row: CollectionRow): CollectionRecord {
   });
 }
 
-function sameDraft(left: CollectionRecord, right: CollectionRecord): boolean {
+function sameBusinessDraft(
+  left: CollectionRecord,
+  right: CollectionRecord,
+): boolean {
   return (
-    left.id === right.id &&
     left.customerId === right.customerId &&
     left.customerAccountId === right.customerAccountId &&
     left.representativeId === right.representativeId &&
@@ -230,7 +232,6 @@ function sameDraft(left: CollectionRecord, right: CollectionRecord): boolean {
     left.amount.minorUnits === right.amount.minorUnits &&
     left.paymentMethod === right.paymentMethod &&
     left.collectedAt === right.collectedAt &&
-    left.createdAt === right.createdAt &&
     left.createdBy === right.createdBy &&
     left.evidence.receiptNumber === right.evidence.receiptNumber &&
     left.evidence.evidenceDocumentId === right.evidence.evidenceDocumentId &&
@@ -266,7 +267,11 @@ function assertRequiredText(value: string, fieldName: string): void {
 }
 
 function assertUuid(value: string, fieldName: string): void {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  ) {
     throw new Error(`الحقل ${fieldName} يجب أن يكون UUID صالحًا.`);
   }
 }
