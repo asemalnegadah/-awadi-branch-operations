@@ -1,0 +1,33 @@
+name: Temporary migration bundle export
+
+on:
+  push:
+    branches:
+      - agent/neon-migration-bundle
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify migration sequence
+        run: npm run verify:migrations
+
+      - name: Create migration manifest
+        run: |
+          find db/migrations -maxdepth 1 -type f -name '*.sql' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > db/migrations/SHA256SUMS
+
+      - name: Upload exact migration bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-production-migrations
+          path: db/migrations
+          if-no-files-found: error
+          retention-days: 1
