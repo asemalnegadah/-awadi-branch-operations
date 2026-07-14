@@ -79,5 +79,21 @@ jobs:
               --file "${migration}"
           done
 
+      - name: Run PostgreSQL integrity tests
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          for test_file in db/tests/*.sql; do
+            echo "Running ${test_file}"
+            psql \
+              --host localhost \
+              --port 5432 \
+              --username postgres \
+              --dbname awadi_test \
+              --set ON_ERROR_STOP=1 \
+              --file "${test_file}"
+          done
+
       - name: Build
         run: npm run build
