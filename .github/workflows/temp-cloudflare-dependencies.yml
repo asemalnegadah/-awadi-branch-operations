@@ -43,18 +43,26 @@ jobs:
         run: |
           const fs = require('node:fs');
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.scripts['verify:cloudflare'] = 'node scripts/verify-cloudflare-config.mjs';
           pkg.scripts['cf:build'] = 'opennextjs-cloudflare build';
           pkg.scripts['cf:preview'] = 'npm run cf:build && opennextjs-cloudflare preview';
           pkg.scripts['cf:deploy'] = 'npm run cf:build && opennextjs-cloudflare deploy';
           pkg.scripts['cf:typegen'] = 'wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts';
-          pkg.scripts['cf:dry-run'] = 'npm run cf:build && wrangler deploy --dry-run --outdir .wrangler/dry-run';
+          pkg.scripts['cf:dry-run:built'] = 'wrangler deploy --dry-run --outdir .wrangler/dry-run';
+          pkg.scripts['cf:check'] = 'npm run verify:cloudflare && npm run cf:build && npm run cf:dry-run:built';
           fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
 
-      - name: Commit resolved versions
+      - name: Generate Cloudflare binding types
+        run: npm run cf:typegen
+
+      - name: Verify configuration
+        run: npm run verify:cloudflare
+
+      - name: Commit resolved versions and generated types
         run: |
           git config user.name "ChatGPT engineering agent"
           git config user.email "actions@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json package-lock.json cloudflare-env.d.ts
           if git diff --cached --quiet; then
             exit 0
           fi
