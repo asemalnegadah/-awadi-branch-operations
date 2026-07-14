@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - "agent/**"
       - "chore/**"
       - "feat/**"
       - "fix/**"
@@ -13,13 +14,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   quality:
     name: Lint, typecheck, tests, migrations, and build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
 
     services:
@@ -40,14 +41,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          show-progress: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify migration sequence
+        run: npm run verify:migrations
 
       - name: Lint
         run: npm run lint
@@ -68,7 +76,7 @@ jobs:
           PGPASSWORD: postgres
         run: |
           set -euo pipefail
-          for migration in db/migrations/*.sql; do
+          while IFS= read -r migration; do
             echo "Applying ${migration}"
             psql \
               --host localhost \
@@ -77,14 +85,14 @@ jobs:
               --dbname awadi_test \
               --set ON_ERROR_STOP=1 \
               --file "${migration}"
-          done
+          done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
 
       - name: PostgreSQL integrity tests
         env:
           PGPASSWORD: postgres
         run: |
           set -euo pipefail
-          for test_file in db/tests/*.sql; do
+          while IFS= read -r test_file; do
             echo "Running ${test_file}"
             psql \
               --host localhost \
@@ -93,7 +101,7 @@ jobs:
               --dbname awadi_test \
               --set ON_ERROR_STOP=1 \
               --file "${test_file}"
-          done
+          done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
 
       - name: PostgreSQL repository integration tests
         env:
