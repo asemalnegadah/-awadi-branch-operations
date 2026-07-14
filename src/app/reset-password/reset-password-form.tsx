@@ -19,19 +19,32 @@ export function ResetPasswordForm() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     const parameters = new URLSearchParams(window.location.hash.slice(1));
     const fragmentToken = parameters.get("token");
-
-    if (fragmentToken && /^[A-Za-z0-9_-]{43}$/.test(fragmentToken)) {
-      setToken(fragmentToken);
-    }
+    const validToken =
+      fragmentToken && /^[A-Za-z0-9_-]{43}$/.test(fragmentToken)
+        ? fragmentToken
+        : null;
 
     window.history.replaceState(
       null,
       "",
       `${window.location.pathname}${window.location.search}`,
     );
-    setTokenReady(true);
+
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setToken(validToken);
+      setTokenReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
