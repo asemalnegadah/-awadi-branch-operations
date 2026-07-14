@@ -18,9 +18,9 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, typecheck, test, migrations, and build
+    name: Lint, typecheck, tests, migrations, and build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -55,7 +55,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
+      - name: Unit tests
         run: npm run test
 
       - name: Install PostgreSQL client
@@ -79,7 +79,7 @@ jobs:
               --file "${migration}"
           done
 
-      - name: Run PostgreSQL integrity tests
+      - name: PostgreSQL integrity tests
         env:
           PGPASSWORD: postgres
         run: |
@@ -94,6 +94,11 @@ jobs:
               --set ON_ERROR_STOP=1 \
               --file "${test_file}"
           done
+
+      - name: PostgreSQL repository integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/awadi_test
+        run: npm run test:integration
 
       - name: Build
         run: npm run build
