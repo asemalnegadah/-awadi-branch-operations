@@ -72,12 +72,12 @@ export function extractPdfTableCandidates(
   for (const page of pages) {
     const lines = page.text
       .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+      .map((line, sourceIndex) => ({ line, sourceIndex }))
+      .filter(({ line }) => line.trim().length > 0);
 
     let headerMap: ReadonlyMap<number, CanonicalField> | undefined;
 
-    lines.forEach((line, lineIndex) => {
+    lines.forEach(({ line, sourceIndex }) => {
       const cells = splitTableLine(line);
       if (cells.length < 2) {
         return;
@@ -98,7 +98,7 @@ export function extractPdfTableCandidates(
 
       const rawData: Record<string, string | number> = {
         sourcePage: page.pageNumber,
-        sourceRow: lineIndex + 1,
+        sourceRow: sourceIndex + 1,
       };
 
       for (const [columnIndex, field] of headerMap.entries()) {
@@ -117,8 +117,8 @@ export function extractPdfTableCandidates(
       const mappedFields = headerMap.size;
       const completeness = mappedFields === 0 ? 0 : populatedFields / mappedFields;
 
-      if (cells.length < mappedFields) {
-        warnings.push("عدد خلايا الصف أقل من عدد أعمدة العنوان.");
+      if (cells.length < highestMappedColumn(headerMap) + 1) {
+        warnings.push("عدد خلايا الصف أقل من موضع آخر عمود معروف.");
       }
 
       if (documentType === "DEBT_AGING") {
@@ -134,7 +134,7 @@ export function extractPdfTableCandidates(
         Object.freeze({
           rowType: documentType === "DEBT_AGING" ? "DEBT_AGING" : "CUSTOMER",
           sourcePage: page.pageNumber,
-          sourceRow: lineIndex + 1,
+          sourceRow: sourceIndex + 1,
           confidence: round4(Math.max(0.25, Math.min(0.98, completeness))),
           rawData: Object.freeze(rawData),
           warnings: Object.freeze(warnings),
@@ -173,14 +173,18 @@ function containsRequiredFields(
 
 function splitTableLine(line: string): readonly string[] {
   if (line.includes("\t")) {
-    return line.split(/\t+/).map((cell) => cell.trim());
+    return line.split("\t").map((cell) => cell.trim());
   }
 
   if (line.includes("|")) {
-    return line.split("|").map((cell) => cell.trim()).filter(Boolean);
+    return line.split("|").map((cell) => cell.trim());
   }
 
-  return line.split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
+  return line.trim().split(/\s{2,}/).map((cell) => cell.trim());
+}
+
+function highestMappedColumn(map: ReadonlyMap<number, CanonicalField>): number {
+  return Math.max(...map.keys());
 }
 
 function isSummaryLine(line: string): boolean {
