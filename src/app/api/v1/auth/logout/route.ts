@@ -5,11 +5,30 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/session-token";
 import { getAuthEnv } from "@/lib/config/server-env";
 import { getDatabaseClient } from "@/lib/db/client";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
+import { isSameOriginWrite } from "@/lib/http/same-origin";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
+
+  if (!isSameOriginWrite(request)) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: { code: "ORIGIN_REJECTED", message: "تم رفض مصدر الطلب." },
+        requestId: context.requestId,
+      },
+      {
+        status: 403,
+        headers: {
+          "cache-control": "no-store",
+          "x-request-id": context.requestId,
+        },
+      },
+    );
+  }
+
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
   try {
