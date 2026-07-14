@@ -29,10 +29,7 @@ export function classifyReportVersion(
   incoming: ReportVersionIdentity,
   current: ReportVersionIdentity | null,
 ): ReportVersionDecision {
-  assertIsoDate(incoming.periodStart, "incoming.periodStart");
-  assertIsoDate(incoming.periodEnd, "incoming.periodEnd");
-  assertIsoDate(incoming.asOfDate, "incoming.asOfDate");
-  assertSha256(incoming.sha256);
+  assertVersionIdentity(incoming, "incoming");
 
   if (!current) {
     return freezeDecision(
@@ -43,10 +40,7 @@ export function classifyReportVersion(
     );
   }
 
-  assertIsoDate(current.periodStart, "current.periodStart");
-  assertIsoDate(current.periodEnd, "current.periodEnd");
-  assertIsoDate(current.asOfDate, "current.asOfDate");
-  assertSha256(current.sha256);
+  assertVersionIdentity(current, "current");
 
   if (incoming.reportSeriesKey !== current.reportSeriesKey) {
     return freezeDecision(
@@ -114,6 +108,28 @@ export function classifyReportVersion(
   );
 }
 
+function assertVersionIdentity(
+  identity: ReportVersionIdentity,
+  fieldPrefix: string,
+): void {
+  assertIsoDate(identity.periodStart, `${fieldPrefix}.periodStart`);
+  assertIsoDate(identity.periodEnd, `${fieldPrefix}.periodEnd`);
+  assertIsoDate(identity.asOfDate, `${fieldPrefix}.asOfDate`);
+  assertSha256(identity.sha256);
+
+  if (!identity.reportSeriesKey.trim()) {
+    throw new Error(`${fieldPrefix}.reportSeriesKey إلزامي.`);
+  }
+
+  if (identity.periodStart > identity.periodEnd) {
+    throw new Error(`${fieldPrefix}.periodStart لا يجوز أن يكون بعد periodEnd.`);
+  }
+
+  if (identity.asOfDate !== identity.periodEnd) {
+    throw new Error(`${fieldPrefix}.asOfDate يجب أن يساوي periodEnd لهذا التقرير.`);
+  }
+}
+
 function freezeDecision(
   relation: ReportVersionRelation,
   mayBecomeCurrent: boolean,
@@ -124,7 +140,21 @@ function freezeDecision(
 }
 
 function assertIsoDate(value: string, field: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    throw new Error(`${field} يجب أن يكون تاريخ ISO صالحًا.`);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
     throw new Error(`${field} يجب أن يكون تاريخ ISO صالحًا.`);
   }
 }
