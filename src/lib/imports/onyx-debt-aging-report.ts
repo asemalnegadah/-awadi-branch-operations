@@ -117,7 +117,11 @@ function extractGeneratedAt(text: string): string | undefined {
 }
 
 function extractDeclaredPageCount(text: string): number | undefined {
-  const matches = Array.from(text.matchAll(/\b(\d{1,3})\s*\/\s*(\d{1,3})\b/g));
+  const matches = Array.from(
+    text.matchAll(
+      /\b(\d{1,3})\s*\/\s*(\d{1,3})\b(?!\s*\/\s*\d{2,4})/g,
+    ),
+  );
   const totals = matches
     .map((match) => {
       const left = Number(match[1]);
