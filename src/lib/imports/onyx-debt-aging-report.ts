@@ -176,11 +176,16 @@ function extractCurrencies(text: string): CurrencyCode[] {
 
 function detectAgingScheme(text: string): AgingSchemeCode {
   const compact = text.replace(/\s+/g, " ");
+  const hasRange = (left: number, right: number): boolean =>
+    new RegExp(`(?:${left}\\s*-\\s*${right}|${right}\\s*-\\s*${left})`).test(
+      compact,
+    );
+
   const has120 =
-    /0\s*-\s*30/.test(compact) &&
-    /31\s*-\s*60/.test(compact) &&
-    /61\s*-\s*90/.test(compact) &&
-    /91\s*-\s*120/.test(compact) &&
+    hasRange(0, 30) &&
+    hasRange(31, 60) &&
+    hasRange(61, 90) &&
+    hasRange(91, 120) &&
     /(?:>\s*120|120\s*<)/.test(compact);
 
   return has120
