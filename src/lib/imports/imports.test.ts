@@ -45,7 +45,7 @@ describe("Localized money parsing", () => {
   });
 
   it("يرفض الكسور الزائدة والقيم غير الرقمية", () => {
-    expect(() => parseLocalizedMoneyToMinor("10.123", 2)).toThrow();
+    expect(() => parseLocalizedMoneyToMinor("1,000.123", 2)).toThrow();
     expect(() => parseLocalizedMoneyToMinor("غير معروف", 2)).toThrow();
   });
 });
