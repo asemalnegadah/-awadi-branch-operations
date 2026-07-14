@@ -1,0 +1,65 @@
+name: Static and unit checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Lint, typecheck, and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package.json
+
+      - name: Install dependencies
+        run: npm install --silent --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: npm run typecheck -- --pretty false > typecheck.log 2>&1
+
+      - name: Unit tests
+        id: unit_tests
+        continue-on-error: true
+        run: npm run test -- --reporter=verbose > unit-tests.log 2>&1
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-unit-diagnostics
+          path: |
+            typecheck.log
+            unit-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail when checks failed
+        if: steps.typecheck.outcome == 'failure' || steps.unit_tests.outcome == 'failure'
+        run: |
+          cat typecheck.log
+          cat unit-tests.log
+          exit 1
