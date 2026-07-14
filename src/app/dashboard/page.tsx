@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/authorization";
 import { requireCurrentSession } from "@/lib/auth/current-session";
@@ -21,6 +22,9 @@ const nextModules = [
 
 export default async function DashboardPage() {
   const session = await requireCurrentSession();
+  if (session.user.mustChangePassword) {
+    redirect("/settings/security");
+  }
   requirePermission(session.user, "dashboard.read");
 
   return (
