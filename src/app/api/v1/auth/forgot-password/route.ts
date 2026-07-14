@@ -54,8 +54,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         maxIpRequestsPerHour: environment.PASSWORD_RESET_IP_MAX_PER_HOUR,
         allowInitialManagerBootstrap:
           environment.ALLOW_INITIAL_MANAGER_EMAIL_BOOTSTRAP,
-        initialManagerEmail: environment.INITIAL_MANAGER_EMAIL,
-        initialManagerName: environment.INITIAL_MANAGER_NAME,
+        ...(environment.INITIAL_MANAGER_EMAIL
+          ? { initialManagerEmail: environment.INITIAL_MANAGER_EMAIL }
+          : {}),
+        ...(environment.INITIAL_MANAGER_NAME
+          ? { initialManagerName: environment.INITIAL_MANAGER_NAME }
+          : {}),
       },
       sender,
     );
