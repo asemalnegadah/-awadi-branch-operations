@@ -44,7 +44,9 @@ DECLARE
   test_customer_id uuid := gen_random_uuid();
   test_account_id uuid := gen_random_uuid();
   test_collection_id uuid := gen_random_uuid();
+  test_multi_collection_id uuid := gen_random_uuid();
   latest_metadata jsonb;
+  multi_user_blocked boolean := false;
 BEGIN
   INSERT INTO users (
     id,
@@ -248,24 +250,65 @@ BEGIN
     RAISE EXCEPTION 'self-approved manager transition must be explicitly audited';
   END IF;
 
+  INSERT INTO collections (
+    id,
+    customer_id,
+    customer_account_id,
+    representative_id,
+    currency_code,
+    amount_minor,
+    payment_method,
+    collected_at,
+    receipt_number,
+    created_by,
+    updated_by,
+    idempotency_key
+  ) VALUES (
+    test_multi_collection_id,
+    test_customer_id,
+    test_account_id,
+    test_representative_id,
+    'SR',
+    20000,
+    'CASH',
+    now(),
+    'AUTH-MULTI-RECEIPT',
+    test_user_id,
+    test_user_id,
+    'AUTH-MULTI-COLLECTION'
+  );
+
+  UPDATE collections
+  SET state = 'SUBMITTED', updated_by = test_user_id
+  WHERE id = test_multi_collection_id;
+
   UPDATE organization_settings
   SET operating_mode = 'MULTI_USER'
   WHERE singleton_id = 1;
 
+  IF is_single_manager_actor(test_user_id) THEN
+    RAISE EXCEPTION 'single-manager actor check must be disabled in MULTI_USER mode';
+  END IF;
+
   BEGIN
     UPDATE collections
-    SET state = 'REVERSED',
-        reversed_at = now(),
-        reversed_by = test_user_id,
-        reversal_reason = 'MULTI_USER_NEGATIVE_TEST',
+    SET state = 'REVIEWED',
+        reviewed_at = now(),
+        reviewed_by = test_user_id,
         updated_by = test_user_id
-    WHERE id = test_collection_id;
-
-    RAISE EXCEPTION 'MULTI_USER self-approval guard should have failed earlier';
+    WHERE id = test_multi_collection_id;
   EXCEPTION
     WHEN OTHERS THEN
-      NULL;
+      IF position('authorized reviewer' IN SQLERRM) > 0 THEN
+        multi_user_blocked := true;
+      ELSE
+        RAISE;
+      END IF;
   END;
+
+  IF NOT multi_user_blocked THEN
+    RAISE EXCEPTION 'MULTI_USER mode must block creator self-review';
+  END IF;
 END;
 $$;
 
