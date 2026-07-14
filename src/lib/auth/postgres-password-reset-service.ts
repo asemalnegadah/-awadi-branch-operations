@@ -413,6 +413,7 @@ async function isRequestThrottled(
     WHERE action = 'auth.password_reset.request'
       AND resource_type = 'AUTHENTICATION'
       AND resource_id = ${normalizedEmail}
+      AND result <> 'DENIED'
       AND occurred_at > now() - interval '1 hour'
   `;
 
@@ -429,6 +430,7 @@ async function isRequestThrottled(
     FROM audit_logs
     WHERE action = 'auth.password_reset.request'
       AND ip_address = ${context.ipAddress}
+      AND result <> 'DENIED'
       AND occurred_at > now() - interval '1 hour'
   `;
 
@@ -471,6 +473,12 @@ async function createInitialManagerInvitation(
   if (fullName.trim().length < 2) {
     throw new PasswordResetError("BOOTSTRAP_CONFIGURATION_INVALID");
   }
+
+  await sql`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended('awadi-initial-manager-bootstrap', 0)
+    )
+  `;
 
   const userCountRows = await sql<CountRow[]>`
     SELECT COUNT(*)::integer AS count
