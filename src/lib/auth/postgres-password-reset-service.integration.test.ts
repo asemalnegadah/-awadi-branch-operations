@@ -15,7 +15,6 @@ import {
 import { hashPassword } from "./password";
 import { loginPostgres } from "./postgres-auth-service";
 import {
-  PasswordResetError,
   requestPasswordResetPostgres,
   resetPasswordPostgres,
 } from "./postgres-password-reset-service";
@@ -166,7 +165,7 @@ describe("PostgreSQL email password recovery", () => {
         buildContext(),
         { authSecret },
       ),
-    ).rejects.toMatchObject<PasswordResetError>({
+    ).rejects.toMatchObject({
       code: "INVALID_OR_EXPIRED_TOKEN",
     });
 
