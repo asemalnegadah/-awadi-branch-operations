@@ -138,7 +138,7 @@ describe("Extracted customer resolution", () => {
     expect(result.autoLinkAllowed).toBe(false);
   });
 
-  it("يكشف علاقة الاسم المقطوع عند حدود الكلمات", () => {
+  it("يكشف الاسم المقطوع عند حد كلمة أو داخل الكلمة الأخيرة", () => {
     expect(
       detectCustomerNameRelationship(
         "شركة المقبلي للصناعه",
@@ -148,6 +148,10 @@ describe("Extracted customer resolution", () => {
 
     expect(
       detectCustomerNameRelationship("متجر الن", "متجر النور"),
+    ).toBe("TRUNCATED_PREFIX");
+
+    expect(
+      detectCustomerNameRelationship("متجر الشرق", "متجر النور"),
     ).toBe("DIFFERENT");
   });
 });
