@@ -61,7 +61,8 @@ BEGIN
     OLD.created_at,
     OLD.expires_at,
     OLD.request_id,
-    OLD.requested_ip
+    OLD.requested_ip,
+    OLD.metadata
   ) IS DISTINCT FROM ROW(
     NEW.id,
     NEW.user_id,
@@ -70,9 +71,31 @@ BEGIN
     NEW.created_at,
     NEW.expires_at,
     NEW.request_id,
-    NEW.requested_ip
+    NEW.requested_ip,
+    NEW.metadata
   ) THEN
     RAISE EXCEPTION 'password reset token identity fields are immutable';
+  END IF;
+
+  IF (OLD.consumed_at IS NOT NULL OR OLD.revoked_at IS NOT NULL)
+    AND ROW(
+      NEW.delivered_at,
+      NEW.delivery_provider,
+      NEW.delivery_id,
+      NEW.consumed_at,
+      NEW.consumed_ip,
+      NEW.revoked_at,
+      NEW.revoke_reason
+    ) IS DISTINCT FROM ROW(
+      OLD.delivered_at,
+      OLD.delivery_provider,
+      OLD.delivery_id,
+      OLD.consumed_at,
+      OLD.consumed_ip,
+      OLD.revoked_at,
+      OLD.revoke_reason
+    ) THEN
+    RAISE EXCEPTION 'terminal password reset token cannot be modified';
   END IF;
 
   IF OLD.delivered_at IS NOT NULL AND ROW(
@@ -87,18 +110,9 @@ BEGIN
     RAISE EXCEPTION 'password reset delivery metadata is immutable once recorded';
   END IF;
 
-  IF OLD.consumed_at IS NOT NULL AND NEW.consumed_at IS DISTINCT FROM OLD.consumed_at THEN
-    RAISE EXCEPTION 'consumed password reset token cannot be modified';
-  END IF;
-
-  IF OLD.revoked_at IS NOT NULL AND ROW(NEW.revoked_at, NEW.revoke_reason)
-    IS DISTINCT FROM ROW(OLD.revoked_at, OLD.revoke_reason) THEN
-    RAISE EXCEPTION 'revoked password reset token cannot be modified';
-  END IF;
-
   IF NEW.consumed_at IS NOT NULL AND OLD.consumed_at IS NULL THEN
-    IF NEW.revoked_at IS NOT NULL OR NEW.consumed_ip IS NULL THEN
-      RAISE EXCEPTION 'token consumption requires an IP and a non-revoked token';
+    IF NEW.revoked_at IS NOT NULL THEN
+      RAISE EXCEPTION 'token consumption requires a non-revoked token';
     END IF;
   END IF;
 
