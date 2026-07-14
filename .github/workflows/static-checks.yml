@@ -28,10 +28,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: package.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
-        run: npm install --silent --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci --silent --no-audit --no-fund
+
+      - name: Verify migration sequence
+        run: npm run verify:migrations
 
       - name: Lint
         run: npm run lint
