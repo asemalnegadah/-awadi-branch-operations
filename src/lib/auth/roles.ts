@@ -10,6 +10,12 @@ export const systemRoleCodes = [
 
 export type SystemRoleCode = (typeof systemRoleCodes)[number];
 
+const systemRoleCodeSet = new Set<string>(systemRoleCodes);
+
+export function isSystemRoleCode(value: string): value is SystemRoleCode {
+  return systemRoleCodeSet.has(value);
+}
+
 export const systemRoleNamesAr: Readonly<Record<SystemRoleCode, string>> = {
   OWNER_AUDITOR: "المالك أو المراقب",
   BRANCH_MANAGER: "مدير فرع عدن",
