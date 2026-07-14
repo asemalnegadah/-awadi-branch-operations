@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  extractPositionedTextWithPdfJs,
-  PdfExtractionError,
-} from "./pdfjs-positioned-extractor";
+import { extractPositionedTextWithPdfJs } from "./pdfjs-positioned-extractor";
 
 describe("PDF.js positioned extraction", () => {
   it("يقرأ PDF حقيقيًا من البايتات ويحفظ إحداثيات النص", async () => {
@@ -41,7 +38,7 @@ describe("PDF.js positioned extraction", () => {
   it("يعيد رمز خطأ واضحًا للبايتات التالفة", async () => {
     await expect(
       extractPositionedTextWithPdfJs(new TextEncoder().encode("not a pdf")),
-    ).rejects.toMatchObject<Partial<PdfExtractionError>>({
+    ).rejects.toMatchObject({
       code: "PDF_PARSE_FAILED",
     });
   });
