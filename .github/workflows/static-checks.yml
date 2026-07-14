@@ -1,4 +1,4 @@
-name: Static checks
+name: Static and unit checks
 
 on:
   pull_request:
@@ -13,9 +13,9 @@ concurrency:
 
 jobs:
   static:
-    name: Lint and typecheck
+    name: Lint, typecheck, and unit tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
       - name: Checkout repository
@@ -41,17 +41,25 @@ jobs:
         continue-on-error: true
         run: npm run typecheck -- --pretty false > typecheck.log 2>&1
 
-      - name: Upload typecheck diagnostics
+      - name: Unit tests
+        id: unit_tests
+        continue-on-error: true
+        run: npm run test -- --reporter=verbose > unit-tests.log 2>&1
+
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: typecheck-diagnostics
-          path: typecheck.log
+          name: static-unit-diagnostics
+          path: |
+            typecheck.log
+            unit-tests.log
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail when typecheck failed
-        if: steps.typecheck.outcome == 'failure'
+      - name: Fail when checks failed
+        if: steps.typecheck.outcome == 'failure' || steps.unit_tests.outcome == 'failure'
         run: |
           cat typecheck.log
+          cat unit-tests.log
           exit 1
