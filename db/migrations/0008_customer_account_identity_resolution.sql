@@ -24,10 +24,10 @@ CREATE INDEX customer_accounts_number_lookup_idx
   WHERE account_number_normalized IS NOT NULL;
 
 COMMENT ON COLUMN customer_accounts.account_number IS
-  'رقم العميل المحاسبي/كود الحساب لهذه العملة، وليس رقم الهاتف.';
+  'رقم العميل المحاسبي/كود الحساب، وليس رقم الهاتف. تسمح العملة بربطه بحساب الدين الصحيح.';
 
 COMMENT ON COLUMN customers.customer_number IS
-  'رقم عام قديم للعميل؛ المرجع التشغيلي الجديد لأرقام SR وRG هو customer_accounts.account_number.';
+  'رقم العميل العام. يمكن أن تستخدم حسابات SR وRG الرقم نفسه أو أرقامًا مختلفة وفق المصدر.';
 
 CREATE TABLE extracted_customer_identity_matches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -109,7 +109,13 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   account_record customer_accounts%ROWTYPE;
+  normalized_extracted_number text;
 BEGIN
+  normalized_extracted_number := CASE
+    WHEN NEW.extracted_customer_number IS NULL THEN NULL
+    ELSE upper(regexp_replace(btrim(NEW.extracted_customer_number), '\s+', '', 'g'))
+  END;
+
   IF NEW.matched_customer_account_id IS NOT NULL THEN
     SELECT * INTO account_record
     FROM customer_accounts
@@ -128,9 +134,9 @@ BEGIN
       RAISE EXCEPTION 'matched account currency does not match extracted currency';
     END IF;
 
-    IF NEW.extracted_customer_number_normalized IS NOT NULL
+    IF normalized_extracted_number IS NOT NULL
       AND account_record.account_number_normalized IS DISTINCT FROM
-        NEW.extracted_customer_number_normalized THEN
+        normalized_extracted_number THEN
       RAISE EXCEPTION 'matched account number does not match extracted customer number';
     END IF;
   END IF;
