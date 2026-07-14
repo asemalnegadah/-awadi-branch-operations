@@ -3,44 +3,50 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 
-interface LoginApiResponse {
+interface ForgotPasswordApiResponse {
   readonly success: boolean;
+  readonly message?: string;
   readonly error?: {
     readonly message?: string;
   };
 }
 
-export function LoginForm() {
+export function ForgotPasswordForm() {
+  const [message, setMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setMessage(null);
     setErrorMessage(null);
     setSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get("email") ?? "");
-    const password = String(formData.get("password") ?? "");
 
     try {
-      const response = await fetch("/api/v1/auth/login", {
+      const response = await fetch("/api/v1/auth/forgot-password", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email }),
       });
-      const payload = (await response.json()) as LoginApiResponse;
+      const payload = (await response.json()) as ForgotPasswordApiResponse;
 
       if (!response.ok || !payload.success) {
         setErrorMessage(
-          payload.error?.message ?? "تعذر تسجيل الدخول. حاول مرة أخرى.",
+          payload.error?.message ?? "تعذر إرسال طلب الاستعادة الآن.",
         );
         return;
       }
 
-      window.location.assign("/dashboard");
+      setMessage(
+        payload.message ??
+          "إذا كان البريد مسجلًا، فستصل رسالة التفعيل أو الاستعادة خلال دقائق.",
+      );
+      event.currentTarget.reset();
     } catch {
-      setErrorMessage("تعذر الاتصال بالنظام الآن. تحقق من الاتصال وحاول مجددًا.");
+      setErrorMessage("تعذر الاتصال بالنظام الآن. حاول مرة أخرى لاحقًا.");
     } finally {
       setSubmitting(false);
     }
@@ -55,25 +61,18 @@ export function LoginForm() {
           name="email"
           type="email"
           inputMode="email"
-          autoComplete="username"
+          autoComplete="email"
           required
           maxLength={254}
           dir="ltr"
         />
       </div>
 
-      <div className="form-field">
-        <label htmlFor="password">كلمة المرور</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          maxLength={128}
-          dir="ltr"
-        />
-      </div>
+      {message ? (
+        <p className="form-success" role="status">
+          {message}
+        </p>
+      ) : null}
 
       {errorMessage ? (
         <p className="form-error" role="alert">
@@ -82,11 +81,11 @@ export function LoginForm() {
       ) : null}
 
       <button className="primary-button" type="submit" disabled={submitting}>
-        {submitting ? "جارٍ التحقق…" : "تسجيل الدخول"}
+        {submitting ? "جارٍ الإرسال…" : "إرسال رابط الاستعادة"}
       </button>
 
-      <Link className="auth-text-link" href="/forgot-password">
-        نسيت كلمة المرور أو لم أفعّل الحساب
+      <Link className="auth-text-link" href="/login">
+        العودة إلى تسجيل الدخول
       </Link>
     </form>
   );
