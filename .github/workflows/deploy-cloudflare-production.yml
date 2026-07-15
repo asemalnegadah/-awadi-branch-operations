@@ -1,0 +1,75 @@
+name: Deploy Cloudflare production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to confirm the production deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate and deploy production Worker
+    runs-on: ubuntu-24.04
+    environment: production
+    if: github.ref == 'refs/heads/main'
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+    steps:
+      - name: Validate explicit production confirmation
+        shell: bash
+        run: |
+          if [ "${{ inputs.confirmation }}" != "DEPLOY" ]; then
+            echo "Production deployment requires the exact confirmation DEPLOY."
+            exit 1
+          fi
+
+      - name: Verify required deployment secrets exist
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify migration sequence
+        run: npm run verify:migrations
+
+      - name: Verify Cloudflare configuration
+        run: npm run verify:cloudflare
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build Cloudflare Worker
+        run: npm run cf:build
+
+      - name: Deploy existing production Worker
+        run: npx wrangler deploy --config wrangler.jsonc --keep-vars
