@@ -14,13 +14,21 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "verify:migrations": "node scripts/verify-migrations.mjs",
+    "verify:cloudflare": "node scripts/verify-cloudflare-config.mjs",
     "bootstrap:manager": "node scripts/bootstrap-manager.mjs",
-    "check": "npm run verify:migrations && npm run lint && npm run typecheck && npm run test && npm run build"
+    "check": "npm run verify:migrations && npm run verify:cloudflare && npm run lint && npm run typecheck && npm run test && npm run build",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "npm run cf:build && opennextjs-cloudflare preview",
+    "cf:deploy": "npm run cf:build && opennextjs-cloudflare deploy",
+    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "cf:dry-run:built": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "cf:check": "npm run verify:cloudflare && npm run cf:build && npm run cf:dry-run:built"
   },
   "engines": {
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@opennextjs/cloudflare": "1.20.1",
     "next": "16.2.10",
     "pdfjs-dist": "5.4.449",
     "postgres": "3.4.7",
@@ -35,6 +43,7 @@
     "eslint": "9.39.0",
     "eslint-config-next": "16.2.10",
     "typescript": "5.9.3",
-    "vitest": "4.1.9"
+    "vitest": "4.1.9",
+    "wrangler": "4.110.0"
   }
 }

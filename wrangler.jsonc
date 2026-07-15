@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "awadi-branch-operations",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-07-14",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "AWADI_FILES",
+      "bucket_name": "awadi-branch-files"
+    }
+  ],
+  "vars": {
+    "NEXT_PUBLIC_APP_ENV": "production",
+    "SESSION_TTL_HOURS": "8",
+    "PASSWORD_RESET_TTL_MINUTES": "30",
+    "PASSWORD_RESET_EMAIL_MAX_PER_HOUR": "3",
+    "PASSWORD_RESET_IP_MAX_PER_HOUR": "10",
+    "ALLOW_INITIAL_MANAGER_EMAIL_BOOTSTRAP": "false"
+  },
+  "secrets": {
+    "required": [
+      "DATABASE_URL",
+      "AUTH_SECRET",
+      "APP_BASE_URL",
+      "RESEND_API_KEY",
+      "EMAIL_FROM"
+    ]
+  }
+}

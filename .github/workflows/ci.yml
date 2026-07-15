@@ -19,9 +19,9 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, typecheck, tests, migrations, and build
+    name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     services:
       postgres:
@@ -56,6 +56,9 @@ jobs:
 
       - name: Verify migration sequence
         run: npm run verify:migrations
+
+      - name: Verify Cloudflare configuration
+        run: npm run verify:cloudflare
 
       - name: Lint
         run: npm run lint
@@ -108,5 +111,8 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/awadi_test
         run: npm run test:integration
 
-      - name: Build
+      - name: Build Next.js application
         run: npm run build
+
+      - name: Build and validate Cloudflare Worker
+        run: npm run cf:check
