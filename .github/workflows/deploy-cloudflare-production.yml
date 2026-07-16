@@ -122,14 +122,14 @@ jobs:
           esac
 
       - name: Checkout validated commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ steps.target.outputs.sha }}
           show-progress: false
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
