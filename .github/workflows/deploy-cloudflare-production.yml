@@ -1,5 +1,6 @@
 name: Deploy Cloudflare production
 
+# Manual production deployment only. This comment forces GitHub to re-index the workflow.
 on:
   workflow_dispatch:
     inputs:
