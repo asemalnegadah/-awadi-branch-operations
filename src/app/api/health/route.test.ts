@@ -9,46 +9,24 @@ vi.mock("@/lib/db/client", () => ({
 import { GET } from "./route";
 
 describe("GET /api/health", () => {
-  beforeEach(() => {
-    databaseQuery.mockReset();
-  });
+  beforeEach(() => databaseQuery.mockReset());
 
-  it("returns a minimal healthy response when the database is reachable", async () => {
+  it("returns only public health state when healthy", async () => {
     databaseQuery.mockResolvedValueOnce([{ "?column?": 1 }]);
-
     const response = await GET();
-    const body = await response.json();
-
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok", service: "awadi-branch-operations" });
     expect(response.headers.get("cache-control")).toBe("no-store, max-age=0");
-    expect(body).toMatchObject({
-      status: "ok",
-      service: "awadi-branch-operations",
-      dependencies: {
-        database: "ok",
-      },
-    });
-    expect(body).not.toHaveProperty("database_time");
-    expect(body).not.toHaveProperty("started_at");
   });
 
-  it("returns 503 without exposing the database error", async () => {
+  it("does not expose internal dependency errors", async () => {
     databaseQuery.mockRejectedValueOnce(
       new Error("postgresql://secret-user:secret-password@private-host/database"),
     );
-
     const response = await GET();
     const body = await response.json();
-
     expect(response.status).toBe(503);
-    expect(body).toMatchObject({
-      status: "degraded",
-      service: "awadi-branch-operations",
-      dependencies: {
-        database: "unavailable",
-      },
-    });
-    expect(JSON.stringify(body)).not.toContain("secret-password");
-    expect(JSON.stringify(body)).not.toContain("private-host");
+    expect(body).toEqual({ status: "degraded", service: "awadi-branch-operations" });
+    expect(JSON.stringify(body)).not.toMatch(/secret|postgres|dependencies|timestamp|private-host/u);
   });
 });

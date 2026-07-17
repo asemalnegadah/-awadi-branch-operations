@@ -69,6 +69,7 @@ describe("PostgreSQL password change", () => {
           newPassword: replacementPassword,
         },
         buildContext(),
+        authSecret,
       ),
     ).rejects.toBeInstanceOf(AuthenticationError);
 
@@ -90,7 +91,7 @@ describe("PostgreSQL password change", () => {
     const currentLogin = await createLogin(originalPassword);
     const otherLogin = await createLogin(originalPassword);
 
-    await changeOwnPasswordPostgres(
+    const rotated = await changeOwnPasswordPostgres(
       sql,
       currentLogin.session,
       {
@@ -98,11 +99,15 @@ describe("PostgreSQL password change", () => {
         newPassword: replacementPassword,
       },
       buildContext(),
+      authSecret,
     );
 
     await expect(
       getAuthenticatedSessionByToken(sql, currentLogin.token, authSecret),
-    ).resolves.not.toBeNull();
+    ).resolves.toBeNull();
+    await expect(
+      getAuthenticatedSessionByToken(sql, rotated.token, authSecret),
+    ).resolves.toMatchObject({ user: { email } });
     await expect(
       getAuthenticatedSessionByToken(sql, otherLogin.token, authSecret),
     ).resolves.toBeNull();
