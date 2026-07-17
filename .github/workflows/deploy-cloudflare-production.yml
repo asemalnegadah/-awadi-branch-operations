@@ -1,57 +1,135 @@
 name: Deploy Cloudflare production
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirmation:
-        description: Type DEPLOY to confirm the production deployment
-        required: true
-        type: string
-  push:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - main
-    paths:
-      - ".github/workflows/deploy-cloudflare-production.yml"
+
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA from main that already passed CI
+        required: true
+        type: string
+      confirmation:
+        description: Type DEPLOY to confirm production deployment
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: cloudflare-production-deployment
+  group: cloudflare-production
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Validate and deploy production Worker
+    name: Deploy validated Worker
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     environment: production
-    if: github.ref == 'refs/heads/main'
+
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.confirmation == 'DEPLOY')
+
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      HEALTHCHECK_URL: ${{ vars.PRODUCTION_HEALTHCHECK_URL }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
-      - name: Validate production authorization
+      - name: Resolve deployment commit
+        id: target
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.confirmation }}" != "DEPLOY" ]; then
-            echo "Manual production deployment requires the exact confirmation DEPLOY."
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            sha="${{ github.event.workflow_run.head_sha }}"
+          else
+            sha="${{ inputs.commit_sha }}"
+          fi
+
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::A full 40-character commit SHA is required."
             exit 1
           fi
-          echo "Production deployment authorized for event ${{ github.event_name }}."
 
-      - name: Verify required deployment secrets exist
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify manual commit belongs to main and passed CI
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+          set -euo pipefail
+          sha="${{ steps.target.outputs.sha }}"
 
-      - name: Checkout main
-        uses: actions/checkout@v4
+          git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/main \
+            | grep -q "^${sha}[[:space:]]" || {
+              echo "::error::Manual deployment is limited to the current main commit."
+              exit 1
+            }
+
+          successful_runs="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed&per_page=20" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | length'
+          )"
+
+          if [ "$successful_runs" -lt 1 ]; then
+            echo "::error::The requested commit has no successful CI run."
+            exit 1
+          fi
+
+      - name: Verify deployment credentials and configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || {
+            echo "::error::Missing CLOUDFLARE_ACCOUNT_ID."
+            exit 1
+          }
+
+          test -n "$CLOUDFLARE_API_TOKEN" || {
+            echo "::error::Missing CLOUDFLARE_API_TOKEN."
+            exit 1
+          }
+
+          test -n "$HEALTHCHECK_URL" || {
+            echo "::error::Missing repository environment variable PRODUCTION_HEALTHCHECK_URL."
+            exit 1
+          }
+
+          case "$HEALTHCHECK_URL" in
+            https://*/api/health) ;;
+            *)
+              echo "::error::PRODUCTION_HEALTHCHECK_URL must be HTTPS and end with /api/health."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout validated commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          show-progress: false
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -60,23 +138,83 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Verify migration sequence
-        run: npm run verify:migrations
+      - name: Verify repository configuration
+        run: |
+          set -euo pipefail
+          npm run verify:migrations
+          npm run verify:cloudflare
 
-      - name: Verify Cloudflare configuration
-        run: npm run verify:cloudflare
+      - name: Verify required Cloudflare Worker secrets
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Lint
-        run: npm run lint
+          npx wrangler secret list --config wrangler.jsonc --json > /tmp/cloudflare-secrets.json
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Unit tests
-        run: npm run test
+          for secret_name in DATABASE_URL AUTH_SECRET APP_BASE_URL RESEND_API_KEY EMAIL_FROM; do
+            jq -e --arg name "$secret_name" \
+              'any(.[]; .name == $name)' \
+              /tmp/cloudflare-secrets.json >/dev/null || {
+                echo "::error::Missing Cloudflare Worker secret: ${secret_name}"
+                exit 1
+              }
+          done
 
       - name: Build Cloudflare Worker
         run: npm run cf:build
 
-      - name: Deploy existing production Worker
+      - name: Validate generated Worker
+        run: npm run cf:dry-run:built
+
+      - name: Deploy production Worker
         run: npx wrangler deploy --config wrangler.jsonc --keep-vars
+
+      - name: Verify production health
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3 4 5; do
+            response_file="$(mktemp)"
+            status_code="$(
+              curl \
+                --silent \
+                --show-error \
+                --location \
+                --output "$response_file" \
+                --write-out '%{http_code}' \
+                --connect-timeout 10 \
+                --max-time 20 \
+                "$HEALTHCHECK_URL" || true
+            )"
+
+            if [ "$status_code" = "200" ] &&
+               jq -e '.status == "ok" and .service == "awadi-branch-operations"' \
+                 "$response_file" >/dev/null 2>&1; then
+              echo "Production health check passed."
+              rm -f "$response_file"
+              exit 0
+            fi
+
+            echo "Health attempt ${attempt} failed with HTTP ${status_code}."
+            rm -f "$response_file"
+            sleep 10
+          done
+
+          echo "::error::Production health check failed after deployment."
+          exit 1
+
+      - name: Publish deployment summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Cloudflare production deployment"
+            echo
+            echo "- Commit: \`${{ steps.target.outputs.sha }}\`"
+            echo "- Worker: \`awadi-branch-operations\`"
+            echo "- Database migrations applied: \`no\`"
+            echo "- Health URL: configured in the protected production environment"
+            echo
+            echo "Rollback: redeploy the last known-good commit through this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
