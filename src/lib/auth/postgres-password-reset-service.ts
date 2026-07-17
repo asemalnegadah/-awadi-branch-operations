@@ -126,7 +126,7 @@ export async function requestPasswordResetPostgres(
     }
 
     const rawToken = createPasswordResetToken();
-    const tokenHash = hashPasswordResetToken(rawToken, configuration.authSecret);
+    const tokenHash = await hashPasswordResetToken(rawToken, configuration.authSecret);
     const purpose: PasswordResetPurpose = user.status === "INVITED" ? "INVITE" : "RESET";
 
     await transaction`
@@ -272,7 +272,7 @@ export async function requestPasswordResetPostgres(
           'FAILED',
           ${JSON.stringify({
             purpose: prepared.purpose,
-            error: error instanceof Error ? error.message.slice(0, 240) : "unknown",
+            errorType: error instanceof Error ? error.name.slice(0, 80) : "UnknownError",
           })}::jsonb
         )
       `;
@@ -293,7 +293,7 @@ export async function resetPasswordPostgres(
     throw new PasswordResetError("INVALID_OR_EXPIRED_TOKEN");
   }
 
-  const tokenHash = hashPasswordResetToken(rawToken, configuration.authSecret);
+  const tokenHash = await hashPasswordResetToken(rawToken, configuration.authSecret);
   const passwordHash = await hashPassword(newPassword);
 
   const resetSucceeded = await sql.begin<boolean>(async (transaction) => {

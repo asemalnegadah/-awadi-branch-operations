@@ -1,22 +1,28 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createRandomToken, hmacSha256Hex } from "@/lib/security/web-crypto";
 
 export const SESSION_COOKIE_NAME = "awadi_session";
 export const DEFAULT_SESSION_TTL_HOURS = 8;
+export const DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES = 60;
+const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const SESSION_TOKEN_DOMAIN = "awadi-session-v2";
 
 export function createSessionToken(): string {
-  return randomBytes(32).toString("base64url");
+  return createRandomToken(32);
 }
 
-export function hashSessionToken(token: string, authSecret: string): string {
-  if (token.length < 32) {
+export function isSessionToken(token: string): boolean {
+  return SESSION_TOKEN_PATTERN.test(token);
+}
+
+export async function hashSessionToken(
+  token: string,
+  authSecret: string,
+): Promise<string> {
+  if (!isSessionToken(token)) {
     throw new Error("رمز الجلسة غير صالح.");
   }
 
-  if (authSecret.length < 32) {
-    throw new Error("AUTH_SECRET يجب أن يكون بطول 32 حرفًا على الأقل.");
-  }
-
-  return createHmac("sha256", authSecret).update(token).digest("hex");
+  return hmacSha256Hex(authSecret, SESSION_TOKEN_DOMAIN, token);
 }
 
 export function sessionExpiryFromNow(
@@ -28,4 +34,10 @@ export function sessionExpiryFromNow(
   }
 
   return new Date(now.getTime() + ttlHours * 60 * 60 * 1000);
+}
+
+export function assertIdleTimeoutMinutes(value: number): void {
+  if (!Number.isInteger(value) || value < 5 || value > 480) {
+    throw new Error("مدة خمول الجلسة يجب أن تكون بين 5 و480 دقيقة.");
+  }
 }

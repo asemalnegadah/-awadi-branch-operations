@@ -1,6 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { isIP } from "node:net";
-
 import type { NextRequest } from "next/server";
 
 import type { RequestSecurityContext } from "@/lib/auth/types";
@@ -15,36 +12,43 @@ export function getRequestSecurityContext(
   const requestId =
     suppliedRequestId && uuidPattern.test(suppliedRequestId)
       ? suppliedRequestId
-      : randomUUID();
+      : crypto.randomUUID();
 
   return Object.freeze({
     requestId,
     ipAddress: getTrustedIpCandidate(request),
-    userAgent: truncate(request.headers.get("user-agent"), 500),
+    userAgent: sanitizeHeader(request.headers.get("user-agent"), 500),
   });
 }
 
 function getTrustedIpCandidate(request: NextRequest): string | null {
-  const candidates = [
-    request.headers.get("cf-connecting-ip"),
-    request.headers.get("x-real-ip"),
-    request.headers.get("x-forwarded-for")?.split(",")[0],
-  ];
+  const cloudflareIp = request.headers.get("cf-connecting-ip")?.trim();
+  if (cloudflareIp && isIpAddress(cloudflareIp)) {
+    return cloudflareIp;
+  }
 
-  for (const candidate of candidates) {
-    const value = candidate?.trim();
-    if (value && isIP(value) !== 0) {
-      return value;
+  if (process.env.NODE_ENV !== "production") {
+    const localProxyIp = request.headers.get("x-real-ip")?.trim();
+    if (localProxyIp && isIpAddress(localProxyIp)) {
+      return localProxyIp;
     }
   }
 
   return null;
 }
 
-function truncate(value: string | null, maximumLength: number): string | null {
+function isIpAddress(value: string): boolean {
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/u.test(value)) {
+    return value.split(".").every((part) => Number(part) <= 255);
+  }
+
+  return /^[0-9a-f:]+$/iu.test(value) && value.includes(":");
+}
+
+function sanitizeHeader(value: string | null, maximumLength: number): string | null {
   if (!value) {
     return null;
   }
 
-  return value.slice(0, maximumLength);
+  return value.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, maximumLength);
 }

@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 
+import { safeInternalRedirectPath } from "@/lib/http/safe-redirect";
+
 interface LoginApiResponse {
   readonly success: boolean;
   readonly error?: {
@@ -38,7 +40,10 @@ export function LoginForm() {
         return;
       }
 
-      window.location.assign("/dashboard");
+      const returnTo = safeInternalRedirectPath(
+        new URLSearchParams(window.location.search).get("returnTo"),
+      );
+      window.location.assign(returnTo);
     } catch {
       setErrorMessage("تعذر الاتصال بالنظام الآن. تحقق من الاتصال وحاول مجددًا.");
     } finally {

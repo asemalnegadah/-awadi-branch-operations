@@ -34,7 +34,8 @@ export interface LoginResult {
 export type AuthenticationFailureCode =
   | "INVALID_CREDENTIALS"
   | "ACCOUNT_LOCKED"
-  | "ACCOUNT_DISABLED";
+  | "ACCOUNT_DISABLED"
+  | "RATE_LIMITED";
 
 export class AuthenticationError extends Error {
   readonly code: AuthenticationFailureCode;

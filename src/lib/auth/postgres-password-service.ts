@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 
 import { hashPassword, verifyPassword } from "./password";
+import { createSessionToken, hashSessionToken } from "./session-token";
 import { AuthenticationError } from "./types";
 import type {
   AuthenticatedSession,
@@ -18,13 +19,21 @@ export interface ChangeOwnPasswordInput {
   readonly newPassword: string;
 }
 
+export interface RotatedSessionToken {
+  readonly token: string;
+  readonly expiresAt: Date;
+}
+
 export async function changeOwnPasswordPostgres(
   sql: Sql,
   session: AuthenticatedSession,
   input: ChangeOwnPasswordInput,
   context: RequestSecurityContext,
-): Promise<void> {
+  authSecret: string,
+): Promise<RotatedSessionToken> {
   const newPasswordHash = await hashPassword(input.newPassword);
+  const newSessionToken = createSessionToken();
+  const newSessionTokenHash = await hashSessionToken(newSessionToken, authSecret);
 
   const changed = await sql.begin(async (transaction) => {
     const rows = await transaction<PasswordUserRow[]>`
@@ -100,16 +109,18 @@ export async function changeOwnPasswordPostgres(
 
     const currentSessionRows = await transaction<{ id: string }[]>`
       UPDATE user_sessions
-      SET password_version = ${nextPasswordVersion},
+      SET token_hash = ${newSessionTokenHash},
+          password_version = ${nextPasswordVersion},
           last_seen_at = now()
       WHERE id = ${session.id}
         AND user_id = ${session.user.id}
         AND revoked_at IS NULL
+        AND expires_at > now()
       RETURNING id
     `;
 
     if (!currentSessionRows[0]) {
-      throw new Error("تعذر تحديث الجلسة الحالية بعد تغيير كلمة المرور.");
+      throw new Error("تعذر تدوير الجلسة الحالية بعد تغيير كلمة المرور.");
     }
 
     await transaction`
@@ -136,7 +147,10 @@ export async function changeOwnPasswordPostgres(
         ${context.ipAddress},
         ${context.userAgent},
         'SUCCESS',
-        ${JSON.stringify({ revokedOtherSessions: true })}::jsonb
+        ${JSON.stringify({
+          revokedOtherSessions: true,
+          rotatedCurrentSessionToken: true,
+        })}::jsonb
       )
     `;
 
@@ -146,4 +160,9 @@ export async function changeOwnPasswordPostgres(
   if (!changed) {
     throw new AuthenticationError("INVALID_CREDENTIALS");
   }
+
+  return Object.freeze({
+    token: newSessionToken,
+    expiresAt: session.expiresAt,
+  });
 }
