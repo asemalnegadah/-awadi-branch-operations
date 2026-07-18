@@ -1,0 +1,264 @@
++      "escalation level",
++    );
+     if (input.level <= currentLevel) {
+-      throw new PromiseBusinessRuleError("مستوى التصعيد الجديد يجب أن يكون أعلى من المستوى الحالي.");
++      throw new PromiseBusinessRuleError(
++        "مستوى التصعيد الجديد يجب أن يكون أعلى من المستوى الحالي.",
++      );
+     }
+     const rows = await transaction.unsafe<{ id: string }[]>(
+       `
+@@ -680,7 +921,11 @@
+       [input.level, input.reason, context.actor.id, promiseId, input.version],
+     );
+     if (!rows[0]) throw new PromiseConflictError();
+-    const promise = await requirePromiseById(transaction, promiseId);
++    const promise = await requirePromiseById(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     const oldSnapshot = lockSnapshot(locked);
+     const newSnapshot = promiseSnapshot(promise);
+     await insertEvent(transaction, {
+@@ -695,7 +940,15 @@
+       sourceId: null,
+       idempotencyKey: context.idempotencyKey,
+     });
+-    await insertAudit(transaction, context, "promises.escalate", promiseId, oldSnapshot, newSnapshot, input.reason);
++    await insertAudit(
++      transaction,
++      context,
++      "promises.escalate",
++      promiseId,
++      oldSnapshot,
++      newSnapshot,
++      input.reason,
++    );
+     return Object.freeze({ promise, replayed: false });
+   });
+ }
+@@ -705,6 +958,7 @@
+   promiseId: string,
+   input: AllocateCollectionInput,
+   context: PromiseCommandContext,
++  representativeScopeId?: string,
+ ): Promise<{
+   readonly promise: PaymentPromise;
+   readonly allocation: PaymentPromiseAllocation;
+@@ -720,13 +974,21 @@
+         throw new PromiseIdempotencyConflictError();
+       }
+       return Object.freeze({
+-        promise: await requirePromiseById(transaction, promiseId),
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
+         allocation: mapAllocationRow(existingRows[0]),
+         replayed: true,
+       });
+     }
+ 
+-    const lockedPromise = await lockPromise(transaction, promiseId);
++    const lockedPromise = await lockPromise(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     assertOpenPromise(lockedPromise);
+     const collection = await lockCollection(transaction, input.collectionId);
+     validateCollectionForPromise(lockedPromise, collection);
+@@ -745,15 +1007,31 @@
+         [input.collectionId],
+       ),
+     ]);
+-    const promiseAllocated = safeInteger(promiseTotalRows[0]?.total ?? 0, "promise allocation total");
+-    const collectionAllocated = safeInteger(collectionTotalRows[0]?.total ?? 0, "collection allocation total");
+-    const promisedAmount = safeInteger(lockedPromise.promised_amount_minor, "promised amount");
+-    const collectionAmount = safeInteger(collection.amount_minor, "collection amount");
++    const promiseAllocated = safeInteger(
++      promiseTotalRows[0]?.total ?? 0,
++      "promise allocation total",
++    );
++    const collectionAllocated = safeInteger(
++      collectionTotalRows[0]?.total ?? 0,
++      "collection allocation total",
++    );
++    const promisedAmount = safeInteger(
++      lockedPromise.promised_amount_minor,
++      "promised amount",
++    );
++    const collectionAmount = safeInteger(
++      collection.amount_minor,
++      "collection amount",
++    );
+     if (promiseAllocated + input.amountMinor > promisedAmount) {
+-      throw new PromiseBusinessRuleError("مبلغ الربط يتجاوز الرصيد المتبقي في الوعد.");
++      throw new PromiseBusinessRuleError(
++        "مبلغ الربط يتجاوز الرصيد المتبقي في الوعد.",
++      );
+     }
+     if (collectionAllocated + input.amountMinor > collectionAmount) {
+-      throw new PromiseBusinessRuleError("مبلغ الربط يتجاوز الرصيد المتاح في التحصيل.");
++      throw new PromiseBusinessRuleError(
++        "مبلغ الربط يتجاوز الرصيد المتاح في التحصيل.",
++      );
+     }
+ 
+     const inserted = await transaction.unsafe<{ id: string }[]>(
+@@ -789,7 +1067,11 @@
+         throw new PromiseIdempotencyConflictError();
+       }
+       return Object.freeze({
+-        promise: await requirePromiseById(transaction, promiseId),
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
+         allocation: mapAllocationRow(raced[0]),
+         replayed: true,
+       });
+@@ -801,7 +1083,11 @@
+     );
+     const allocation = allocationRows[0];
+     if (!allocation) throw new Error("تعذر استرجاع ربط التحصيل.");
+-    const promise = await requirePromiseById(transaction, promiseId);
++    const promise = await requirePromiseById(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     const oldSnapshot = lockSnapshot(lockedPromise);
+     const newSnapshot = promiseSnapshot(promise);
+     await insertEvent(transaction, {
+@@ -809,14 +1095,24 @@
+       context,
+       eventType: "COLLECTION_ALLOCATED",
+       oldValues: oldSnapshot,
+-      newValues: { allocation: allocationSnapshot(allocation), promise: newSnapshot },
++      newValues: {
++        allocation: allocationSnapshot(allocation),
++        promise: newSnapshot,
++      },
+       operationPayload: normalizePayload(input),
+       reason: null,
+       sourceEntity: "COLLECTION",
+       sourceId: input.collectionId,
+       idempotencyKey: context.idempotencyKey,
+     });
+-    await insertStatusEventIfChanged(transaction, lockedPromise.base_status, promise, context, oldSnapshot, newSnapshot);
++    await insertStatusEventIfChanged(
++      transaction,
++      lockedPromise.base_status,
++      promise,
++      context,
++      oldSnapshot,
++      newSnapshot,
++    );
+     await insertAudit(
+       transaction,
+       context,
+@@ -825,7 +1121,11 @@
+       oldSnapshot,
+       { allocation: allocationSnapshot(allocation), promise: newSnapshot },
+     );
+-    return Object.freeze({ promise, allocation: mapAllocationRow(allocation), replayed: false });
++    return Object.freeze({
++      promise,
++      allocation: mapAllocationRow(allocation),
++      replayed: false,
++    });
+   });
+ }
+ 
+@@ -835,6 +1135,7 @@
+   allocationId: string,
+   input: ReverseAllocationInput,
+   context: PromiseCommandContext,
++  representativeScopeId?: string,
+ ): Promise<{
+   readonly promise: PaymentPromise;
+   readonly allocation: PaymentPromiseAllocation;
+@@ -854,7 +1155,11 @@
+         throw new PromiseIdempotencyConflictError();
+       }
+       return Object.freeze({
+-        promise: await requirePromiseById(transaction, promiseId),
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
+         allocation: mapAllocationRow(replayRows[0]),
+         replayed: true,
+       });
+@@ -869,9 +1174,14 @@
+       [allocationId],
+     );
+     const seed = seedRows[0];
+-    if (!seed || seed.promise_id !== promiseId) throw new PromiseNotFoundError();
++    if (!seed || seed.promise_id !== promiseId)
++      throw new PromiseNotFoundError();
+ 
+-    const lockedPromise = await lockPromise(transaction, promiseId);
++    const lockedPromise = await lockPromise(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     await lockCollection(transaction, seed.collection_id);
+     const allocationRows = await transaction.unsafe<AllocationRow[]>(
+       `${allocationSelect} WHERE allocation.id = $1::uuid FOR UPDATE`,
+@@ -904,7 +1214,8 @@
+         allocationId,
+       ],
+     );
+-    if (!updated[0]) throw new PromiseConflictError("تم عكس هذا الربط من عملية أخرى.");
++    if (!updated[0])
++      throw new PromiseConflictError("تم عكس هذا الربط من عملية أخرى.");
+ 
+     const finalRows = await transaction.unsafe<AllocationRow[]>(
+       `${allocationSelect} WHERE allocation.id = $1`,
+@@ -912,32 +1223,56 @@
+     );
+     const allocation = finalRows[0];
+     if (!allocation) throw new Error("تعذر استرجاع الربط المعكوس.");
+-    const promise = await requirePromiseById(transaction, promiseId);
++    const promise = await requirePromiseById(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     const oldSnapshot = lockSnapshot(lockedPromise);
+     const newSnapshot = promiseSnapshot(promise);
+     await insertEvent(transaction, {
+       promiseId,
+       context,
+       eventType: "COLLECTION_REVERSED",
+-      oldValues: { allocation: allocationSnapshot(allocationBefore), promise: oldSnapshot },
+-      newValues: { allocation: allocationSnapshot(allocation), promise: newSnapshot },
++      oldValues: {
++        allocation: allocationSnapshot(allocationBefore),
++        promise: oldSnapshot,
++      },
++      newValues: {
++        allocation: allocationSnapshot(allocation),
++        promise: newSnapshot,
++      },
+       operationPayload: normalizePayload(input),
+       reason: input.reason,
+       sourceEntity: "PAYMENT_PROMISE_ALLOCATION",
+       sourceId: allocationId,
+       idempotencyKey: context.idempotencyKey,
+     });
+-    await insertStatusEventIfChanged(transaction, lockedPromise.base_status, promise, context, oldSnapshot, newSnapshot);
++    await insertStatusEventIfChanged(
++      transaction,
++      lockedPromise.base_status,
++      promise,
++      context,
++      oldSnapshot,
++      newSnapshot,
