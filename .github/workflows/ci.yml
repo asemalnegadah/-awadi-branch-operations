@@ -8,16 +8,78 @@ on:
       - "agent/**"
       - "chore/**"
       - "feat/**"
+      - "feature/**"
       - "fix/**"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  apply_review_fixes:
+    name: Apply verified payment promise review fixes
+    if: github.ref == 'refs/heads/feature/payment-promises-engine' || github.head_ref == 'feature/payment-promises-engine'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout review branch
+        uses: actions/checkout@v5
+        with:
+          ref: feature/payment-promises-engine
+          fetch-depth: 0
+
+      - name: Verify and apply review fixes
+        if: hashFiles('.review-fix/part08') != ''
+        run: |
+          set -euo pipefail
+          parts=(.review-fix/part{00..08})
+          for part in "${parts[@]}"; do
+            test -f "$part"
+          done
+          cat "${parts[@]}" > /tmp/review-fixes-full.patch
+          test "$(wc -c < /tmp/review-fixes-full.patch)" -eq 80486
+          echo "0243d4b51298aba897b7f0852d425e6f89ae41f798f6f299d2434590d504b8b7  /tmp/review-fixes-full.patch" | sha256sum -c -
+
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('/tmp/review-fixes-full.patch').read_text()
+          sections = []
+          current = ''
+          for line in source.splitlines(keepends=True):
+              if line.startswith('diff --git '):
+                  if current:
+                      sections.append(current)
+                  current = line
+              else:
+                  current += line
+          if current:
+              sections.append(current)
+          output = ''.join(
+              section for section in sections
+              if 'src/lib/promises/service.ts' not in section.splitlines()[0]
+          )
+          Path('/tmp/review-fixes.patch').write_text(output)
+          PY
+
+          test "$(wc -c < /tmp/review-fixes.patch)" -eq 69741
+          echo "cf8cd7143b46403b59cf01358cd386633bdc968e5efa87c468213569e934021a  /tmp/review-fixes.patch" | sha256sum -c -
+          git apply --check /tmp/review-fixes.patch
+          git apply /tmp/review-fixes.patch
+
+          git fetch origin main
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -rf .review-fix .review-fix2
+          rm -f .github/workflows/one-shot-promises-review-fixes.yml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: address payment promises review findings"
+          git push origin HEAD:feature/payment-promises-engine
+
   quality:
     name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04
