@@ -71,6 +71,14 @@
 
 كل Write API يطبق المصادقة والصلاحية وSame-origin وRequest ID والتحقق وIdempotency وسجل الأحداث والتدقيق ورسائل الخطأ الآمنة.
 
+## مسار التحقق قبل الجاهزية
+
+- تطبق جميع Migrations على PostgreSQL 16 نظيف داخل CI فقط.
+- تشغّل SQL smoke وintegrity واختبارات Repository والتزامن باتصالات مستقلة.
+- تشغّل اختبارات Validation والصلاحيات السلبية وAPI وواجهة المستخدم.
+- يجب نجاح Next.js production build وOpenNext Cloudflare build وWrangler dry-run.
+- يجب خلو Diff النهائي من ملفات النقل أو آليات الجرد أو الأسرار قبل تحويل PR إلى Ready for review.
+
 ## النشر
 
 لا تطبق Migration على Neon production ضمن تطوير أو مراجعة هذا PR. التطبيق في الإنتاج يحتاج موافقة ونشرًا مضبوطًا عبر مسار الـMigration المعتمد.
