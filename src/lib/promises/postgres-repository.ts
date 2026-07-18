@@ -1629,7 +1629,7 @@ async function findOperationReplay(
   idempotencyKey: string,
   payload: Readonly<Record<string, unknown>>,
 ): Promise<boolean> {
-  const rows = await transaction.unsafe<EventRow[]>(
+  const rows = await transaction.unsafe<(EventRow & { payload_matches: boolean })[]>(
     `
       SELECT
         event.id,
@@ -1645,20 +1645,21 @@ async function findOperationReplay(
         event.reason,
         event.source_entity,
         event.source_id,
-        event.idempotency_key
+        event.idempotency_key,
+        event.operation_payload = $2::jsonb AS payload_matches
       FROM payment_promise_events AS event
       JOIN users AS actor ON actor.id = event.actor_user_id
       WHERE event.idempotency_key = $1
       FOR UPDATE
     `,
-    [idempotencyKey],
+    [idempotencyKey, transaction.json(payload as never)],
   );
   const row = rows[0];
   if (!row) return false;
   if (
     row.promise_id !== promiseId ||
     row.event_type !== eventType ||
-    !jsonEqual(row.operation_payload, payload)
+    !row.payload_matches
   ) {
     throw new PromiseIdempotencyConflictError();
   }
@@ -1705,9 +1706,9 @@ async function insertEvent(
         input.context.actor.id,
         input.context.request.requestId,
         input.eventType,
-        JSON.stringify(input.oldValues),
-        JSON.stringify(input.newValues),
-        JSON.stringify(input.operationPayload),
+        transaction.json(input.oldValues as never),
+        transaction.json(input.newValues as never),
+        transaction.json(input.operationPayload as never),
         input.reason,
         input.sourceEntity,
         input.sourceId,
@@ -1763,8 +1764,8 @@ async function insertAudit(
       context.request.ipAddress,
       context.request.userAgent,
       reason ?? null,
-      previousValues ? JSON.stringify(previousValues) : null,
-      newValues ? JSON.stringify(newValues) : null,
+      previousValues ? transaction.json(previousValues as never) : null,
+      newValues ? transaction.json(newValues as never) : null,
     ],
   );
 }
