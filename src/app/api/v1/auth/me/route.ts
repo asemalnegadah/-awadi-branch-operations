@@ -23,6 +23,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       token,
       authEnv.AUTH_SECRET,
       authEnv.SESSION_IDLE_TIMEOUT_MINUTES,
+      context,
     );
     if (!session) {
       return unauthorized(context.requestId);

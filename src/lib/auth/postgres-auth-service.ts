@@ -72,6 +72,11 @@ interface ReservedAttemptRow {
   id: string;
 }
 
+interface RevokedSessionRow {
+  session_id: string;
+  user_id: string;
+}
+
 type ReservationOutcome =
   | { readonly allowed: false }
   | { readonly allowed: true; readonly attemptId: string };
@@ -213,6 +218,7 @@ export async function getAuthenticatedSessionByToken(
   token: string,
   authSecret: string,
   idleTimeoutMinutes = 60,
+  context?: RequestSecurityContext,
 ): Promise<AuthenticatedSession | null> {
   if (!token) return null;
   assertIdleTimeoutMinutes(idleTimeoutMinutes);
@@ -222,13 +228,13 @@ export async function getAuthenticatedSessionByToken(
   } catch {
     return null;
   }
-  await sql`
-    UPDATE user_sessions
-    SET revoked_at = now(), revoke_reason = 'IDLE_TIMEOUT'
-    WHERE token_hash = ${tokenHash}
-      AND revoked_at IS NULL
-      AND last_seen_at <= now() - (${idleTimeoutMinutes} * interval '1 minute')
-  `;
+
+  await revokeIdleSessionIfExpired(
+    sql,
+    tokenHash,
+    idleTimeoutMinutes,
+    context,
+  );
   return getAuthenticatedSessionByHash(sql, tokenHash, true, idleTimeoutMinutes);
 }
 
@@ -271,6 +277,64 @@ export async function revokeSessionByToken(
       )
     `;
     return true;
+  });
+}
+
+async function revokeIdleSessionIfExpired(
+  sql: Sql,
+  tokenHash: string,
+  idleTimeoutMinutes: number,
+  context?: RequestSecurityContext,
+): Promise<void> {
+  const auditContext = context ??
+    Object.freeze({
+      requestId: crypto.randomUUID(),
+      ipAddress: null,
+      userAgent: "server-session-read",
+    });
+  assertRequestContext(auditContext);
+
+  await sql.begin(async (transaction) => {
+    const rows = await transaction<RevokedSessionRow[]>`
+      UPDATE user_sessions
+      SET revoked_at = now(), revoke_reason = 'IDLE_TIMEOUT'
+      WHERE token_hash = ${tokenHash}
+        AND revoked_at IS NULL
+        AND last_seen_at <= now() - (${idleTimeoutMinutes} * interval '1 minute')
+      RETURNING id AS session_id, user_id
+    `;
+    const revoked = rows[0];
+    if (!revoked) return;
+
+    await transaction`
+      INSERT INTO audit_logs (
+        actor_user_id,
+        actor_type,
+        action,
+        resource_type,
+        resource_id,
+        request_id,
+        session_id,
+        ip_address,
+        user_agent,
+        reason,
+        result,
+        metadata
+      ) VALUES (
+        ${revoked.user_id},
+        'SYSTEM',
+        'auth.session.idle_timeout',
+        'USER_SESSION',
+        ${revoked.session_id},
+        ${auditContext.requestId},
+        ${revoked.session_id},
+        ${auditContext.ipAddress},
+        ${auditContext.userAgent},
+        'IDLE_TIMEOUT',
+        'SUCCESS',
+        ${JSON.stringify({ trigger: "SESSION_READ" })}::jsonb
+      )
+    `;
   });
 }
 
@@ -457,6 +521,31 @@ async function finalizeInvalidPassword(
         transaction,
         normalizedEmail,
         current?.id ?? snapshot.id,
+        null,
+        "DENIED",
+        code,
+        context,
+      );
+      return code;
+    }
+
+    if (
+      current.password_hash !== snapshot.password_hash ||
+      current.password_version !== snapshot.password_version
+    ) {
+      const code: AuthenticationFailureCode = "INVALID_CREDENTIALS";
+      await completeReservedAttempt(
+        transaction,
+        attemptId,
+        current.id,
+        null,
+        false,
+        code,
+      );
+      await recordLoginAudit(
+        transaction,
+        normalizedEmail,
+        current.id,
         null,
         "DENIED",
         code,
