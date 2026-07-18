@@ -34,12 +34,15 @@ jobs:
       - name: Verify and apply review fixes
         if: hashFiles('.review-fix/part08') != ''
         run: |
+          exec > >(tee /tmp/review-fix.log) 2>&1
           set -euo pipefail
           parts=(.review-fix/part{00..08})
           for part in "${parts[@]}"; do
             test -f "$part"
           done
           cat "${parts[@]}" > /tmp/review-fixes-full.patch
+          wc -c /tmp/review-fixes-full.patch
+          sha256sum /tmp/review-fixes-full.patch
           test "$(wc -c < /tmp/review-fixes-full.patch)" -eq 80486
           echo "0243d4b51298aba897b7f0852d425e6f89ae41f798f6f299d2434590d504b8b7  /tmp/review-fixes-full.patch" | sha256sum -c -
 
@@ -64,6 +67,8 @@ jobs:
           Path('/tmp/review-fixes.patch').write_text(output)
           PY
 
+          wc -c /tmp/review-fixes.patch
+          sha256sum /tmp/review-fixes.patch
           test "$(wc -c < /tmp/review-fixes.patch)" -eq 69741
           echo "cf8cd7143b46403b59cf01358cd386633bdc968e5efa87c468213569e934021a  /tmp/review-fixes.patch" | sha256sum -c -
           git apply --check /tmp/review-fixes.patch
@@ -79,6 +84,15 @@ jobs:
           git add -A
           git commit -m "fix: address payment promises review findings"
           git push origin HEAD:feature/payment-promises-engine
+
+      - name: Upload review-fix diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payment-promises-review-fix-diagnostics
+          path: /tmp/review-fix.log
+          if-no-files-found: ignore
+          retention-days: 1
 
   quality:
     name: Lint, typecheck, tests, migrations, and builds
