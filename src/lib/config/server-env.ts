@@ -12,19 +12,38 @@ const serverEnvSchema = z.object({
     ),
 });
 
-const authEnvSchema = z.object({
+const sharedAuthFields = {
   AUTH_SECRET: z
     .string()
     .min(32, "AUTH_SECRET must contain at least 32 characters"),
+  APP_BASE_URL: z.string().url(),
+  TRUSTED_ORIGINS: z.string().trim().optional().default(""),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24).default(8),
-});
+  SESSION_IDLE_TIMEOUT_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(480)
+    .default(60),
+  LOGIN_EMAIL_MAX_PER_15_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(50)
+    .default(10),
+  LOGIN_IP_MAX_PER_15_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .max(200)
+    .default(30),
+};
+
+const authEnvSchema = z.object(sharedAuthFields);
 
 const passwordRecoveryEnvSchema = z
   .object({
-    AUTH_SECRET: z
-      .string()
-      .min(32, "AUTH_SECRET must contain at least 32 characters"),
-    APP_BASE_URL: z.string().url(),
+    ...sharedAuthFields,
     RESEND_API_KEY: z.string().trim().min(1),
     EMAIL_FROM: z.string().trim().min(3).refine((value) => value.includes("@"), {
       message: "EMAIL_FROM must contain an email address",
@@ -63,8 +82,12 @@ const passwordRecoveryEnvSchema = z
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
-export type AuthEnv = z.infer<typeof authEnvSchema>;
-export type PasswordRecoveryEnv = z.infer<typeof passwordRecoveryEnvSchema>;
+export type AuthEnv = z.infer<typeof authEnvSchema> & {
+  readonly TRUSTED_ORIGIN_SET: ReadonlySet<string>;
+};
+export type PasswordRecoveryEnv = z.infer<typeof passwordRecoveryEnvSchema> & {
+  readonly TRUSTED_ORIGIN_SET: ReadonlySet<string>;
+};
 
 let cachedEnv: ServerEnv | undefined;
 let cachedAuthEnv: AuthEnv | undefined;
@@ -93,10 +116,10 @@ export function getAuthEnv(
     return cachedAuthEnv;
   }
 
-  const parsed = authEnvSchema.parse(environment);
+  const parsed = finalizeAuthEnvironment(authEnvSchema.parse(environment), environment);
 
   if (environment === process.env) {
-    cachedAuthEnv = Object.freeze(parsed);
+    cachedAuthEnv = parsed;
   }
 
   return parsed;
@@ -109,15 +132,13 @@ export function getPasswordRecoveryEnv(
     return cachedPasswordRecoveryEnv;
   }
 
-  const parsed = passwordRecoveryEnvSchema.parse(environment);
-  const baseUrl = new URL(parsed.APP_BASE_URL);
-
-  if (environment.NODE_ENV === "production" && baseUrl.protocol !== "https:") {
-    throw new Error("APP_BASE_URL must use HTTPS in production.");
-  }
+  const parsed = finalizeAuthEnvironment(
+    passwordRecoveryEnvSchema.parse(environment),
+    environment,
+  );
 
   if (environment === process.env) {
-    cachedPasswordRecoveryEnv = Object.freeze(parsed);
+    cachedPasswordRecoveryEnv = parsed;
   }
 
   return parsed;
@@ -127,4 +148,52 @@ export function resetServerEnvForTests(): void {
   cachedEnv = undefined;
   cachedAuthEnv = undefined;
   cachedPasswordRecoveryEnv = undefined;
+}
+
+function finalizeAuthEnvironment<
+  T extends { APP_BASE_URL: string; TRUSTED_ORIGINS: string },
+>(parsed: T, environment: NodeJS.ProcessEnv): T & {
+  readonly TRUSTED_ORIGIN_SET: ReadonlySet<string>;
+} {
+  const baseUrl = validateOriginUrl(parsed.APP_BASE_URL, "APP_BASE_URL");
+
+  if (environment.NODE_ENV === "production" && baseUrl.protocol !== "https:") {
+    throw new Error("APP_BASE_URL must use HTTPS in production.");
+  }
+
+  const trustedOrigins = new Set<string>([baseUrl.origin]);
+  for (const rawOrigin of parsed.TRUSTED_ORIGINS.split(",")) {
+    const candidate = rawOrigin.trim();
+    if (!candidate) {
+      continue;
+    }
+
+    const originUrl = validateOriginUrl(candidate, "TRUSTED_ORIGINS");
+    if (environment.NODE_ENV === "production" && originUrl.protocol !== "https:") {
+      throw new Error("TRUSTED_ORIGINS must use HTTPS in production.");
+    }
+    trustedOrigins.add(originUrl.origin);
+  }
+
+  return Object.freeze({
+    ...parsed,
+    TRUSTED_ORIGIN_SET: Object.freeze(trustedOrigins),
+  });
+}
+
+function validateOriginUrl(value: string, fieldName: string): URL {
+  const parsed = new URL(value);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`${fieldName} must use HTTP or HTTPS.`);
+  }
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(`${fieldName} must contain origins only, without paths or credentials.`);
+  }
+  return parsed;
 }

@@ -97,6 +97,67 @@ describe("PostgreSQL authentication", () => {
     ).resolves.toBeNull();
   });
 
+  it("ينهي الجلسة بعد تجاوز مهلة الخمول ويسجل سبب الإبطال", async () => {
+    const result = await loginPostgres(
+      sql,
+      { email: managerEmail, password },
+      buildContext("127.0.0.21"),
+      { authSecret, sessionTtlHours: 8, sessionIdleTimeoutMinutes: 30 },
+    );
+
+    await sql`
+      UPDATE user_sessions
+      SET last_seen_at = now() - interval '31 minutes'
+      WHERE id = ${result.session.id}
+    `;
+
+    await expect(
+      getAuthenticatedSessionByToken(sql, result.token, authSecret, 30),
+    ).resolves.toBeNull();
+
+    const rows = await sql<{ revoke_reason: string | null }[]>`
+      SELECT revoke_reason
+      FROM user_sessions
+      WHERE id = ${result.session.id}
+    `;
+    expect(rows[0]?.revoke_reason).toBe("IDLE_TIMEOUT");
+  });
+
+  it("يحد محاولات الدخول بحسب البريد وعنوان IP", async () => {
+    const unknownEmail = "rate.limit.unknown@example.test";
+    const context = buildContext("127.0.0.22");
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        loginPostgres(
+          sql,
+          { email: unknownEmail, password: "Incorrect-Password-2026" },
+          context,
+          {
+            authSecret,
+            sessionTtlHours: 8,
+            maxEmailAttemptsPer15Minutes: 5,
+            maxIpAttemptsPer15Minutes: 20,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    }
+
+    await expect(
+      loginPostgres(
+        sql,
+        { email: unknownEmail, password: "Incorrect-Password-2026" },
+        context,
+        {
+          authSecret,
+          sessionTtlHours: 8,
+          maxEmailAttemptsPer15Minutes: 5,
+          maxIpAttemptsPer15Minutes: 20,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+  });
+
   it("يقفل الحساب بعد خمس محاولات فاشلة ويسجلها", async () => {
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       await expect(
@@ -140,10 +201,10 @@ describe("PostgreSQL authentication", () => {
   });
 });
 
-function buildContext() {
+function buildContext(ipAddress = "127.0.0.1") {
   return Object.freeze({
     requestId: randomUUID(),
-    ipAddress: "127.0.0.1",
+    ipAddress,
     userAgent: "auth-integration-test",
   });
 }

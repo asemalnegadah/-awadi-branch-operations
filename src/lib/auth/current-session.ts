@@ -15,11 +15,12 @@ export async function getCurrentSession(): Promise<AuthenticatedSession | null> 
     return null;
   }
 
-  const { AUTH_SECRET } = getAuthEnv();
+  const authEnv = getAuthEnv();
   return getAuthenticatedSessionByToken(
     getDatabaseClient(),
     token,
-    AUTH_SECRET,
+    authEnv.AUTH_SECRET,
+    authEnv.SESSION_IDLE_TIMEOUT_MINUTES,
   );
 }
 

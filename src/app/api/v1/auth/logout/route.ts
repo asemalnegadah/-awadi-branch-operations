@@ -5,69 +5,59 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/session-token";
 import { getAuthEnv } from "@/lib/config/server-env";
 import { getDatabaseClient } from "@/lib/db/client";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
-import { isSameOriginWrite } from "@/lib/http/same-origin";
+import { validateWriteRequestOrigin } from "@/lib/http/same-origin";
+import { expireSessionCookie } from "@/lib/http/session-cookie";
+import { safeErrorMetadata } from "@/lib/security/safe-error";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
+  const authEnv = getAuthEnv();
+  const originValidation = validateWriteRequestOrigin(
+    request,
+    authEnv.TRUSTED_ORIGIN_SET,
+  );
 
-  if (!isSameOriginWrite(request)) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: { code: "ORIGIN_REJECTED", message: "تم رفض مصدر الطلب." },
-        requestId: context.requestId,
-      },
-      {
-        status: 403,
-        headers: {
-          "cache-control": "no-store",
-          "x-request-id": context.requestId,
-        },
-      },
-    );
+  if (!originValidation.allowed) {
+    return createResponse(false, 403, context.requestId, "تم رفض مصدر الطلب.");
   }
 
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-
   try {
     if (token) {
-      const { AUTH_SECRET } = getAuthEnv();
       await revokeSessionByToken(
         getDatabaseClient(),
         token,
-        AUTH_SECRET,
+        authEnv.AUTH_SECRET,
         context,
       );
     }
   } catch (error) {
     console.error("auth.logout.failed", {
       requestId: context.requestId,
-      error: error instanceof Error ? error.message : "unknown",
+      ...safeErrorMetadata(error),
     });
   }
 
-  const response = NextResponse.json(
-    { success: true, requestId: context.requestId },
+  const response = createResponse(true, 200, context.requestId);
+  response.cookies.set(expireSessionCookie());
+  return response;
+}
+
+function createResponse(
+  success: boolean,
+  status: number,
+  requestId: string,
+  message?: string,
+): NextResponse {
+  return NextResponse.json(
+    success
+      ? { success: true, requestId }
+      : { success: false, error: { message }, requestId },
     {
-      status: 200,
-      headers: {
-        "cache-control": "no-store",
-        "x-request-id": context.requestId,
-      },
+      status,
+      headers: { "cache-control": "no-store", "x-request-id": requestId },
     },
   );
-
-  response.cookies.set({
-    name: SESSION_COOKIE_NAME,
-    value: "",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  });
-
-  return response;
 }

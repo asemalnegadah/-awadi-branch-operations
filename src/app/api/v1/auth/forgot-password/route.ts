@@ -9,7 +9,8 @@ import { getPasswordRecoveryEnv } from "@/lib/config/server-env";
 import { getDatabaseClient } from "@/lib/db/client";
 import { ResendPasswordResetEmailSender } from "@/lib/email/password-reset-email";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
-import { isSameOriginWrite } from "@/lib/http/same-origin";
+import { validateWriteRequestOrigin } from "@/lib/http/same-origin";
+import { safeErrorMetadata } from "@/lib/security/safe-error";
 
 export const runtime = "nodejs";
 
@@ -23,19 +24,22 @@ const genericMessage =
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
 
-  if (!isSameOriginWrite(request)) {
-    return response(false, 403, context.requestId, "تم رفض مصدر الطلب.");
-  }
-
-  const rawBody: unknown = await request.json().catch(() => null);
-  const parsed = inputSchema.safeParse(rawBody);
-
-  if (!parsed.success) {
-    return response(false, 400, context.requestId, "أدخل بريدًا إلكترونيًا صحيحًا.");
-  }
-
   try {
     const environment = getPasswordRecoveryEnv();
+    const originValidation = validateWriteRequestOrigin(
+      request,
+      environment.TRUSTED_ORIGIN_SET,
+    );
+    if (!originValidation.allowed) {
+      return response(false, 403, context.requestId, "تم رفض مصدر الطلب.");
+    }
+
+    const rawBody: unknown = await request.json().catch(() => null);
+    const parsed = inputSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return response(false, 400, context.requestId, "أدخل بريدًا إلكترونيًا صحيحًا.");
+    }
+
     const sender = new ResendPasswordResetEmailSender(
       environment.RESEND_API_KEY,
       environment.EMAIL_FROM,
@@ -49,8 +53,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         authSecret: environment.AUTH_SECRET,
         appBaseUrl: environment.APP_BASE_URL,
         tokenTtlMinutes: environment.PASSWORD_RESET_TTL_MINUTES,
-        maxEmailRequestsPerHour:
-          environment.PASSWORD_RESET_EMAIL_MAX_PER_HOUR,
+        maxEmailRequestsPerHour: environment.PASSWORD_RESET_EMAIL_MAX_PER_HOUR,
         maxIpRequestsPerHour: environment.PASSWORD_RESET_IP_MAX_PER_HOUR,
         allowInitialManagerBootstrap:
           environment.ALLOW_INITIAL_MANAGER_EMAIL_BOOTSTRAP,
@@ -67,19 +70,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return response(true, 200, context.requestId, genericMessage);
   } catch (error) {
     if (error instanceof PasswordResetError) {
-      console.error("auth.password_reset.request_failed", {
+      console.warn("auth.password_reset.request_rejected", {
         requestId: context.requestId,
         code: error.code,
       });
-
       return response(true, 200, context.requestId, genericMessage);
     }
 
     console.error("auth.password_reset.request_failed", {
       requestId: context.requestId,
-      error: error instanceof Error ? error.message : "unknown",
+      ...safeErrorMetadata(error),
     });
-
     return response(
       false,
       500,
@@ -101,10 +102,7 @@ function response(
       : { success: false, error: { message }, requestId },
     {
       status,
-      headers: {
-        "cache-control": "no-store",
-        "x-request-id": requestId,
-      },
+      headers: { "cache-control": "no-store", "x-request-id": requestId },
     },
   );
 }

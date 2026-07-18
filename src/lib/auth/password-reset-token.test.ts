@@ -16,20 +16,19 @@ describe("password reset tokens", () => {
     expect(isPasswordResetToken(token)).toBe(true);
   });
 
-  it("hashes deterministically with domain separation", () => {
+  it("hashes deterministically with domain separation", async () => {
     const token = createPasswordResetToken();
+    const first = await hashPasswordResetToken(token, secret);
+    const second = await hashPasswordResetToken(token, secret);
+    const otherSecret = await hashPasswordResetToken(token, `${secret}x`);
 
-    expect(hashPasswordResetToken(token, secret)).toHaveLength(64);
-    expect(hashPasswordResetToken(token, secret)).toBe(
-      hashPasswordResetToken(token, secret),
-    );
-    expect(hashPasswordResetToken(token, `${secret}x`)).not.toBe(
-      hashPasswordResetToken(token, secret),
-    );
+    expect(first).toHaveLength(64);
+    expect(first).toBe(second);
+    expect(otherSecret).not.toBe(first);
   });
 
-  it("rejects malformed tokens", () => {
+  it("rejects malformed tokens", async () => {
     expect(isPasswordResetToken("not-a-token")).toBe(false);
-    expect(() => hashPasswordResetToken("not-a-token", secret)).toThrow();
+    await expect(hashPasswordResetToken("not-a-token", secret)).rejects.toThrow();
   });
 });

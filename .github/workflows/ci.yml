@@ -109,7 +109,18 @@ jobs:
       - name: PostgreSQL repository integration tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/awadi_test
-        run: npm run test:integration
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee postgres-integration-tests.log
+
+      - name: Upload PostgreSQL integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-integration-diagnostics
+          path: postgres-integration-tests.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build Next.js application
         run: npm run build

@@ -9,7 +9,8 @@ import {
 import { getPasswordRecoveryEnv } from "@/lib/config/server-env";
 import { getDatabaseClient } from "@/lib/db/client";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
-import { isSameOriginWrite } from "@/lib/http/same-origin";
+import { validateWriteRequestOrigin } from "@/lib/http/same-origin";
+import { safeErrorMetadata } from "@/lib/security/safe-error";
 
 export const runtime = "nodejs";
 
@@ -27,24 +28,26 @@ const inputSchema = z
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
 
-  if (!isSameOriginWrite(request)) {
-    return response(false, 403, context.requestId, "تم رفض مصدر الطلب.");
-  }
-
-  const rawBody: unknown = await request.json().catch(() => null);
-  const parsed = inputSchema.safeParse(rawBody);
-
-  if (!parsed.success) {
-    return response(
-      false,
-      400,
-      context.requestId,
-      parsed.error.issues[0]?.message ?? "بيانات الاستعادة غير صحيحة.",
-    );
-  }
-
   try {
     const environment = getPasswordRecoveryEnv();
+    const originValidation = validateWriteRequestOrigin(
+      request,
+      environment.TRUSTED_ORIGIN_SET,
+    );
+    if (!originValidation.allowed) {
+      return response(false, 403, context.requestId, "تم رفض مصدر الطلب.");
+    }
+
+    const rawBody: unknown = await request.json().catch(() => null);
+    const parsed = inputSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return response(
+        false,
+        400,
+        context.requestId,
+        parsed.error.issues[0]?.message ?? "بيانات الاستعادة غير صحيحة.",
+      );
+    }
 
     await resetPasswordPostgres(
       getDatabaseClient(),
@@ -62,7 +65,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   } catch (error) {
     if (error instanceof PasswordResetError) {
-      return response(false, 400, context.requestId, error.message);
+      return response(
+        false,
+        400,
+        context.requestId,
+        "رابط الاستعادة غير صالح أو انتهت صلاحيته.",
+      );
     }
 
     if (error instanceof PasswordPolicyError) {
@@ -71,9 +79,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     console.error("auth.password_reset.complete_failed", {
       requestId: context.requestId,
-      error: error instanceof Error ? error.message : "unknown",
+      ...safeErrorMetadata(error),
     });
-
     return response(
       false,
       500,
@@ -95,10 +102,7 @@ function response(
       : { success: false, error: { message }, requestId },
     {
       status,
-      headers: {
-        "cache-control": "no-store",
-        "x-request-id": requestId,
-      },
+      headers: { "cache-control": "no-store", "x-request-id": requestId },
     },
   );
 }

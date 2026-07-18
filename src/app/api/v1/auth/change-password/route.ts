@@ -8,7 +8,9 @@ import { AuthenticationError } from "@/lib/auth/types";
 import { getAuthEnv } from "@/lib/config/server-env";
 import { getDatabaseClient } from "@/lib/db/client";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
-import { isSameOriginWrite } from "@/lib/http/same-origin";
+import { validateWriteRequestOrigin } from "@/lib/http/same-origin";
+import { createSessionCookie } from "@/lib/http/session-cookie";
+import { safeErrorMetadata } from "@/lib/security/safe-error";
 
 export const runtime = "nodejs";
 
@@ -30,16 +32,21 @@ const inputSchema = z
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const context = getRequestSecurityContext(request);
 
-  if (!isSameOriginWrite(request)) {
-    return createResponse(false, 403, context.requestId, "تم رفض مصدر الطلب.");
-  }
-
-  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (!token) {
-    return createResponse(false, 401, context.requestId, "يجب تسجيل الدخول أولًا.");
-  }
-
   try {
+    const authEnv = getAuthEnv();
+    const originValidation = validateWriteRequestOrigin(
+      request,
+      authEnv.TRUSTED_ORIGIN_SET,
+    );
+    if (!originValidation.allowed) {
+      return createResponse(false, 403, context.requestId, "تم رفض مصدر الطلب.");
+    }
+
+    const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+    if (!token) {
+      return createResponse(false, 401, context.requestId, "يجب تسجيل الدخول أولًا.");
+    }
+
     const rawBody: unknown = await request.json().catch(() => null);
     const parsed = inputSchema.safeParse(rawBody);
     if (!parsed.success) {
@@ -51,14 +58,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const { AUTH_SECRET } = getAuthEnv();
     const sql = getDatabaseClient();
-    const session = await getAuthenticatedSessionByToken(sql, token, AUTH_SECRET);
+    const session = await getAuthenticatedSessionByToken(
+      sql,
+      token,
+      authEnv.AUTH_SECRET,
+      authEnv.SESSION_IDLE_TIMEOUT_MINUTES,
+      context,
+    );
     if (!session) {
       return createResponse(false, 401, context.requestId, "انتهت الجلسة. سجل الدخول مجددًا.");
     }
 
-    await changeOwnPasswordPostgres(
+    const rotated = await changeOwnPasswordPostgres(
       sql,
       session,
       {
@@ -66,9 +78,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         newPassword: parsed.data.newPassword,
       },
       context,
+      authEnv.AUTH_SECRET,
     );
 
-    return createResponse(true, 200, context.requestId);
+    const response = createResponse(true, 200, context.requestId);
+    response.cookies.set(createSessionCookie(rotated.token, rotated.expiresAt));
+    return response;
   } catch (error) {
     if (error instanceof AuthenticationError) {
       return createResponse(false, 400, context.requestId, "كلمة المرور الحالية غير صحيحة.");
@@ -76,7 +91,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     console.error("auth.credential_update.failed", {
       requestId: context.requestId,
-      error: error instanceof Error ? error.message : "unknown",
+      ...safeErrorMetadata(error),
     });
     return createResponse(false, 500, context.requestId, "تعذر تحديث بيانات الدخول الآن.");
   }
@@ -94,10 +109,7 @@ function createResponse(
       : { success: false, error: { message }, requestId },
     {
       status,
-      headers: {
-        "cache-control": "no-store",
-        "x-request-id": requestId,
-      },
+      headers: { "cache-control": "no-store", "x-request-id": requestId },
     },
   );
 }
