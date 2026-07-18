@@ -18,12 +18,19 @@ jobs:
           ref: feature/payment-promises-engine
           fetch-depth: 0
 
-      - name: Apply reviewed Promises Engine patch
-        if: hashFiles('.patches/payment-promises.patch') != ''
+      - name: Verify and apply reviewed Promises Engine patch
+        if: hashFiles('.patches/payment-promises.patch.part13') != ''
         run: |
           set -euo pipefail
-          git apply --check .patches/payment-promises.patch
-          git apply .patches/payment-promises.patch
+          parts=(.patches/payment-promises.patch.part{00..13})
+          for part in "${parts[@]}"; do
+            test -f "$part"
+          done
+          cat "${parts[@]}" > /tmp/payment-promises.patch
+          test "$(wc -c < /tmp/payment-promises.patch)" -eq 240036
+          echo "50e329d41fa0240626908e9ba47e8117e7e4a2ae5be0c900ff0bbd7102a29f6e  /tmp/payment-promises.patch" | sha256sum -c -
+          git apply --check /tmp/payment-promises.patch
+          git apply /tmp/payment-promises.patch
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -55,8 +62,7 @@ jobs:
             src/app/api/v1/promises/route.test.ts
           git commit -m "test: cover payment promises financial integrity"
 
-          rm -f .patches/payment-promises.patch
-          rmdir .patches 2>/dev/null || true
+          rm -rf .patches
           rm -f .github/workflows/one-shot-promises-implementation.yml
           git add -A
           git commit -m "chore: remove temporary implementation transport"
