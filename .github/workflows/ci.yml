@@ -31,12 +31,50 @@ jobs:
           ref: feature/payment-promises-engine
           fetch-depth: 0
 
-      - name: Apply verified patch
-        if: hashFiles('.review-fix5.patch') != ''
+      - name: Apply exact source and test edits
         run: |
           set -euo pipefail
-          git apply --check .review-fix5.patch
-          git apply .review-fix5.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one match in {path}, got {count}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/lib/promises/postgres-repository.ts",
+              """    await lockPromise(transaction, promiseId, representativeScopeId);\n    const before = await requirePromiseById(\n""",
+              """    await lockPromise(transaction, promiseId, representativeScopeId);\n    const contendedRows = await transaction.unsafe<FollowUpRow[]>(\n      `${followUpSelect} WHERE followup.idempotency_key = $1 FOR UPDATE`,\n      [context.idempotencyKey],\n    );\n    if (contendedRows[0]) {\n      if (!sameFollowUpInput(contendedRows[0], promiseId, input)) {\n        throw new PromiseIdempotencyConflictError();\n      }\n      return Object.freeze({\n        promise: await requirePromiseById(\n          transaction,\n          promiseId,\n          representativeScopeId,\n        ),\n        followUp: mapFollowUpRow(contendedRows[0]),\n        replayed: true,\n      });\n    }\n    const before = await requirePromiseById(\n""",
+          )
+
+          replace_once(
+              "src/lib/promises/postgres-repository.ts",
+              """    if (allocationBefore.reversed_at) {\n      throw new PromiseConflictError(\"تم عكس هذا الربط مسبقًا.\");\n    }\n""",
+              """    if (allocationBefore.reversed_at) {\n      if (\n        allocationBefore.reversal_idempotency_key === context.idempotencyKey\n      ) {\n        if (allocationBefore.reversal_reason !== input.reason) {\n          throw new PromiseIdempotencyConflictError();\n        }\n        return Object.freeze({\n          promise: await requirePromiseById(\n            transaction,\n            promiseId,\n            representativeScopeId,\n          ),\n          allocation: mapAllocationRow(allocationBefore),\n          replayed: true,\n        });\n      }\n      throw new PromiseConflictError(\"تم عكس هذا الربط مسبقًا.\");\n    }\n""",
+          )
+
+          replace_once(
+              "src/lib/promises/postgres-repository.ts",
+              """    nextFollowUpAt: input.nextFollowUpAt ?? null,\n""",
+              """    nextFollowUpAt: input.nextFollowUpAt\n      ? toIsoString(input.nextFollowUpAt)\n      : null,\n""",
+          )
+
+          replace_once(
+              "src/lib/promises/postgres-repository.integration.test.ts",
+              """  it(\"يعيد الكتابات المتزامنة ذات مفتاح Idempotency نفسه بدل تعارض version\", async () => {\n""",
+              """  it(\"يعيد إنشاء الوعد مع تطبيع nextFollowUpAt ذي الإزاحة الزمنية\", async () => {\n    const createKey = \"create-offset-timestamp\";\n    const input = promiseInput({\n      nextFollowUpAt: \"2026-07-20T12:00:00+03:00\",\n    });\n    const created = await createPromisePostgres(sql, input, context(createKey));\n    const replay = await createPromisePostgres(sql, input, context(createKey));\n\n    expect(replay.replayed).toBe(true);\n    expect(replay.promise.id).toBe(created.promise.id);\n    const payloadRows = await sql<{ next_follow_up_at: string | null }[]>`\n      SELECT create_payload ->> 'nextFollowUpAt' AS next_follow_up_at\n      FROM payment_promises\n      WHERE id = ${created.promise.id}\n    `;\n    expect(payloadRows[0]?.next_follow_up_at).toBe(\n      \"2026-07-20T09:00:00.000Z\",\n    );\n  });\n\n  it(\"يعيد المتابعات المتزامنة ذات مفتاح Idempotency نفسه\", async () => {\n    const promise = await createPromisePostgres(\n      sql,\n      promiseInput(),\n      context(\"contended-followup-promise\"),\n    );\n    const clientOne = isolatedClient();\n    const clientTwo = isolatedClient();\n    const input = {\n      scheduledAt: \"2026-07-21T09:00:00.000Z\",\n      notes: \"متابعة متزامنة\",\n    };\n    try {\n      const results = await Promise.all([\n        addFollowUpPostgres(\n          clientOne,\n          promise.promise.id,\n          input,\n          context(\"contended-followup\"),\n        ),\n        addFollowUpPostgres(\n          clientTwo,\n          promise.promise.id,\n          input,\n          context(\"contended-followup\"),\n        ),\n      ]);\n      expect(results.map((result) => result.replayed).sort()).toEqual([\n        false,\n        true,\n      ]);\n      expect(results[0]?.followUp.id).toBe(results[1]?.followUp.id);\n    } finally {\n      await Promise.all([clientOne.end(), clientTwo.end()]);\n    }\n  });\n\n  it(\"يعيد الكتابات المتزامنة ذات مفتاح Idempotency نفسه بدل تعارض version\", async () => {\n""",
+          )
+
+          replace_once(
+              "src/lib/promises/postgres-repository.integration.test.ts",
+              """  it(\"يمنع عكس التحصيل قبل عكس تخصيص الوعد ثم يسمح به بعد العكس\", async () => {\n""",
+              """  it(\"يعيد عكس التخصيص المتزامن ذي مفتاح Idempotency نفسه\", async () => {\n    const promise = await createPromisePostgres(\n      sql,\n      promiseInput({ promisedAmountMinor: 2_500 }),\n      context(\"contended-reversal-promise\"),\n    );\n    const collectionId = await createConfirmedCollection(sql, {\n      amountMinor: 2_500,\n    });\n    const allocation = await allocateConfirmedCollectionPostgres(\n      sql,\n      promise.promise.id,\n      { collectionId, amountMinor: 2_500 },\n      context(\"contended-reversal-allocation\"),\n    );\n    const clientOne = isolatedClient();\n    const clientTwo = isolatedClient();\n    try {\n      const results = await Promise.all([\n        reverseCollectionAllocationPostgres(\n          clientOne,\n          promise.promise.id,\n          allocation.allocation.id,\n          { reason: \"عكس متزامن\" },\n          context(\"contended-reversal\"),\n        ),\n        reverseCollectionAllocationPostgres(\n          clientTwo,\n          promise.promise.id,\n          allocation.allocation.id,\n          { reason: \"عكس متزامن\" },\n          context(\"contended-reversal\"),\n        ),\n      ]);\n      expect(results.map((result) => result.replayed).sort()).toEqual([\n        false,\n        true,\n      ]);\n      expect(results[0]?.allocation.id).toBe(results[1]?.allocation.id);\n      expect(results[0]?.promise.fulfilledAmountMinor).toBe(0);\n      expect(results[1]?.promise.fulfilledAmountMinor).toBe(0);\n    } finally {\n      await Promise.all([clientOne.end(), clientTwo.end()]);\n    }\n  });\n\n  it(\"يمنع عكس التحصيل قبل عكس تخصيص الوعد ثم يسمح به بعد العكس\", async () => {\n""",
+          )
+          PY
 
           git fetch origin main
           git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
