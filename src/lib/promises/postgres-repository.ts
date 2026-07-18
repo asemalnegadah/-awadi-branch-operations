@@ -279,12 +279,11 @@ export async function createPromisePostgres(
           created_at,
           updated_by,
           updated_at,
-          idempotency_key,
-          create_payload
+          idempotency_key
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date, $7::date, $8::timestamptz,
           $9, $10, $11, payment_promise_open_status($7::date),
-          $12, now(), $12, now(), $13, $14::jsonb
+          $12, now(), $12, now(), $13
         )
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING id
@@ -303,7 +302,6 @@ export async function createPromisePostgres(
         input.notes ?? null,
         context.actor.id,
         context.idempotencyKey,
-        JSON.stringify(payload),
       ],
     );
 
