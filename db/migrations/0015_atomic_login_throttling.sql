@@ -2,7 +2,7 @@ BEGIN;
 
 ALTER TABLE auth_login_attempts
   ADD COLUMN attempt_state text NOT NULL DEFAULT 'COMPLETED',
-  ADD COLUMN completed_at timestamptz;
+  ADD COLUMN completed_at timestamptz DEFAULT now();
 
 DROP TRIGGER auth_login_attempts_prevent_update ON auth_login_attempts;
 
@@ -20,9 +20,7 @@ ALTER TABLE auth_login_attempts
       (
         attempt_state = 'PENDING'
         AND succeeded IS NULL
-        AND user_id IS NULL
         AND failure_reason IS NULL
-        AND session_id IS NULL
         AND completed_at IS NULL
       )
       OR
@@ -31,23 +29,12 @@ ALTER TABLE auth_login_attempts
         AND completed_at IS NOT NULL
         AND completed_at >= occurred_at
         AND (
-          (
-            succeeded = true
-            AND failure_reason IS NULL
-            AND session_id IS NOT NULL
-          )
+          (succeeded = true AND failure_reason IS NULL)
           OR
-          (
-            succeeded = false
-            AND failure_reason IS NOT NULL
-            AND session_id IS NULL
-          )
+          (succeeded = false AND failure_reason IS NOT NULL)
         )
       )
     );
-
-ALTER TABLE auth_login_attempts
-  ALTER COLUMN attempt_state DROP DEFAULT;
 
 CREATE INDEX auth_login_attempts_pending_time_idx
   ON auth_login_attempts (occurred_at DESC)
