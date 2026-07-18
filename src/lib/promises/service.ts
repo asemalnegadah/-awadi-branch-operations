@@ -2,6 +2,7 @@ import type { Sql } from "postgres";
 
 import { requirePermission } from "@/lib/auth/authorization";
 import type { PermissionCode } from "@/lib/auth/permissions";
+import { AuthorizationError } from "@/lib/auth/types";
 
 import { PromiseNotFoundError } from "./errors";
 import {
@@ -10,6 +11,7 @@ import {
   cancelPromisePostgres,
   createPromisePostgres,
   escalatePromisePostgres,
+  getActiveRepresentativeIdByUserPostgres,
   getCustomerPromiseSummaryPostgres,
   getDuePromisesPostgres,
   getOverduePromisesPostgres,
@@ -45,12 +47,21 @@ export async function createPromise(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.create");
-  return createPromisePostgres(sql, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  assertRepresentativeAssignmentInput(representativeScopeId, input.representativeId);
+  return createPromisePostgres(sql, input, context, representativeScopeId);
 }
 
 export async function getPromise(sql: Sql, promiseId: string, context: PromiseReadContext) {
   requirePromisePermission(context.actor, "promises.read");
-  const promise = await getPromisePostgres(sql, promiseId);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  const promise = await getPromisePostgres(sql, promiseId, representativeScopeId);
   if (!promise) throw new PromiseNotFoundError();
   return promise;
 }
@@ -61,7 +72,15 @@ export async function getPromiseDetails(
   context: PromiseReadContext,
 ) {
   requirePromisePermission(context.actor, "promises.read");
-  const details = await getPromiseDetailsPostgres(sql, promiseId);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  const details = await getPromiseDetailsPostgres(
+    sql,
+    promiseId,
+    representativeScopeId,
+  );
   if (!details) throw new PromiseNotFoundError();
   if (context.actor.permissions.has("promises.view_history")) return details;
   return Object.freeze({ ...details, events: Object.freeze([]) });
@@ -73,7 +92,11 @@ export async function listPromises(
   context: PromiseReadContext,
 ) {
   requirePromisePermission(context.actor, "promises.read");
-  return listPromisesPostgres(sql, filters);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return listPromisesPostgres(sql, filters, representativeScopeId);
 }
 
 export async function updatePromise(
@@ -83,7 +106,23 @@ export async function updatePromise(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.update");
-  return updatePromisePostgres(sql, promiseId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  if (input.representativeId) {
+    assertRepresentativeAssignmentInput(
+      representativeScopeId,
+      input.representativeId,
+    );
+  }
+  return updatePromisePostgres(
+    sql,
+    promiseId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function addFollowUp(
@@ -93,7 +132,17 @@ export async function addFollowUp(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.follow_up");
-  return addFollowUpPostgres(sql, promiseId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return addFollowUpPostgres(
+    sql,
+    promiseId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function rejectPromise(
@@ -103,7 +152,17 @@ export async function rejectPromise(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.reject");
-  return rejectPromisePostgres(sql, promiseId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return rejectPromisePostgres(
+    sql,
+    promiseId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function cancelPromise(
@@ -113,7 +172,17 @@ export async function cancelPromise(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.cancel");
-  return cancelPromisePostgres(sql, promiseId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return cancelPromisePostgres(
+    sql,
+    promiseId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function allocateConfirmedCollection(
@@ -123,7 +192,17 @@ export async function allocateConfirmedCollection(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.allocate_collection");
-  return allocateConfirmedCollectionPostgres(sql, promiseId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return allocateConfirmedCollectionPostgres(
+    sql,
+    promiseId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function reverseCollectionAllocation(
@@ -134,7 +213,18 @@ export async function reverseCollectionAllocation(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.reverse_allocation");
-  return reverseCollectionAllocationPostgres(sql, promiseId, allocationId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return reverseCollectionAllocationPostgres(
+    sql,
+    promiseId,
+    allocationId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function escalatePromise(
@@ -144,7 +234,17 @@ export async function escalatePromise(
   context: PromiseCommandContext,
 ) {
   requirePromisePermission(context.actor, "promises.escalate");
-  return escalatePromisePostgres(sql, promiseId, input, context);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return escalatePromisePostgres(
+    sql,
+    promiseId,
+    input,
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function getPromiseHistory(
@@ -153,14 +253,22 @@ export async function getPromiseHistory(
   context: PromiseReadContext,
 ) {
   requirePromisePermission(context.actor, "promises.view_history");
-  const promise = await getPromisePostgres(sql, promiseId);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  const promise = await getPromisePostgres(sql, promiseId, representativeScopeId);
   if (!promise) throw new PromiseNotFoundError();
   return getPromiseHistoryPostgres(sql, promiseId);
 }
 
 export async function getDuePromises(sql: Sql, context: PromiseReadContext, limit = 100) {
   requirePromisePermission(context.actor, "promises.read");
-  return getDuePromisesPostgres(sql, limit);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return getDuePromisesPostgres(sql, limit, representativeScopeId);
 }
 
 export async function getOverduePromises(
@@ -169,7 +277,11 @@ export async function getOverduePromises(
   limit = 100,
 ) {
   requirePromisePermission(context.actor, "promises.read");
-  return getOverduePromisesPostgres(sql, limit);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return getOverduePromisesPostgres(sql, limit, representativeScopeId);
 }
 
 export async function getCustomerPromiseSummary(
@@ -178,7 +290,15 @@ export async function getCustomerPromiseSummary(
   context: PromiseReadContext,
 ) {
   requirePromisePermission(context.actor, "promises.read");
-  const summary = await getCustomerPromiseSummaryPostgres(sql, customerId);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  const summary = await getCustomerPromiseSummaryPostgres(
+    sql,
+    customerId,
+    representativeScopeId,
+  );
   if (!summary) throw new PromiseNotFoundError();
   return summary;
 }
@@ -189,19 +309,35 @@ export async function getSalespersonPromiseSummary(
   context: PromiseReadContext,
 ) {
   requirePromisePermission(context.actor, "promises.read");
-  const summary = await getSalespersonPromiseSummaryPostgres(sql, representativeId);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  const summary = await getSalespersonPromiseSummaryPostgres(
+    sql,
+    representativeId,
+    representativeScopeId,
+  );
   if (!summary) throw new PromiseNotFoundError();
   return summary;
 }
 
 export async function getPromiseDashboardSummary(sql: Sql, context: PromiseReadContext) {
   requirePromisePermission(context.actor, "promises.read");
-  return getPromiseDashboardSummaryPostgres(sql);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return getPromiseDashboardSummaryPostgres(sql, representativeScopeId);
 }
 
 export async function getPromiseFormOptions(sql: Sql, context: PromiseReadContext) {
   requirePromisePermission(context.actor, "promises.create");
-  return getPromiseFormOptionsPostgres(sql);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return getPromiseFormOptionsPostgres(sql, representativeScopeId);
 }
 
 export async function listAvailableConfirmedCollections(
@@ -210,9 +346,17 @@ export async function listAvailableConfirmedCollections(
   context: PromiseReadContext,
 ) {
   requirePromisePermission(context.actor, "promises.allocate_collection");
-  const promise = await getPromisePostgres(sql, promiseId);
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  const promise = await getPromisePostgres(sql, promiseId, representativeScopeId);
   if (!promise) throw new PromiseNotFoundError();
-  return listAvailableConfirmedCollectionsPostgres(sql, promiseId);
+  return listAvailableConfirmedCollectionsPostgres(
+    sql,
+    promiseId,
+    representativeScopeId,
+  );
 }
 
 function requirePromisePermission(
@@ -220,4 +364,37 @@ function requirePromisePermission(
   permission: PermissionCode,
 ): void {
   requirePermission(actor, permission);
+}
+
+const globalPromiseRoles = new Set([
+  "OWNER_AUDITOR",
+  "BRANCH_MANAGER",
+  "ACCOUNTING_CASHIER",
+  "AUDITOR",
+]);
+
+async function resolveRepresentativeScope(
+  sql: Sql,
+  actor: PromiseReadContext["actor"],
+): Promise<string | undefined> {
+  if (!actor.roles.includes("SALES_REP")) return undefined;
+  if (actor.roles.some((role) => globalPromiseRoles.has(role))) return undefined;
+  const representativeId = await getActiveRepresentativeIdByUserPostgres(
+    sql,
+    actor.id,
+  );
+  if (!representativeId) throw new AuthorizationError();
+  return representativeId;
+}
+
+function assertRepresentativeAssignmentInput(
+  representativeScopeId: string | undefined,
+  requestedRepresentativeId: string,
+): void {
+  if (
+    representativeScopeId &&
+    requestedRepresentativeId !== representativeScopeId
+  ) {
+    throw new AuthorizationError();
+  }
 }
