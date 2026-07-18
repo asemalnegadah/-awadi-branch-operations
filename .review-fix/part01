@@ -1,0 +1,289 @@
+-      throw new PromiseBusinessRuleError("لا يمكن خفض مبلغ الوعد عن المبلغ المنفذ فعليًا.");
++      throw new PromiseBusinessRuleError(
++        "لا يمكن خفض مبلغ الوعد عن المبلغ المنفذ فعليًا.",
++      );
+     }
+-    const finalPromiseDate = input.promiseDate ?? toDateString(locked.promise_date);
++    const finalPromiseDate =
++      input.promiseDate ?? toDateString(locked.promise_date);
+     const finalDueDate = input.dueDate ?? toDateString(locked.due_date);
+     if (finalDueDate < finalPromiseDate) {
+-      throw new PromiseBusinessRuleError("تاريخ الاستحقاق لا يجوز أن يسبق تاريخ الوعد.");
++      throw new PromiseBusinessRuleError(
++        "تاريخ الاستحقاق لا يجوز أن يسبق تاريخ الوعد.",
++      );
+     }
+     const finalNextFollowUp = Object.hasOwn(input, "nextFollowUpAt")
+-      ? input.nextFollowUpAt ?? null
++      ? (input.nextFollowUpAt ?? null)
+       : toOptionalIsoString(locked.next_follow_up_at);
+     const finalDebtReason = input.debtReason ?? locked.debt_reason;
+     const finalDelayReason = Object.hasOwn(input, "delayReason")
+-      ? input.delayReason ?? null
++      ? (input.delayReason ?? null)
+       : locked.delay_reason;
+-    const finalNotes = Object.hasOwn(input, "notes") ? input.notes ?? null : locked.notes;
+-    const targetStatus = calculateStatus(fulfilledAmount, finalPromisedAmount, finalDueDate);
++    const finalNotes = Object.hasOwn(input, "notes")
++      ? (input.notes ?? null)
++      : locked.notes;
++    const targetStatus = calculateStatus(
++      fulfilledAmount,
++      finalPromisedAmount,
++      finalDueDate,
++    );
+ 
+     const updated = await transaction.unsafe<{ id: string }[]>(
+       `
+@@ -517,7 +625,11 @@
+     );
+     if (!updated[0]) throw new PromiseConflictError();
+ 
+-    const promise = await requirePromiseById(transaction, promiseId);
++    const promise = await requirePromiseById(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     const oldSnapshot = lockSnapshot(locked);
+     const newSnapshot = promiseSnapshot(promise);
+     await insertEvent(transaction, {
+@@ -533,16 +645,60 @@
+       idempotencyKey: context.idempotencyKey,
+     });
+     if (locked.representative_id !== promise.representativeId) {
+-      await insertEvent(transaction, specializedEvent(promiseId, context, "ASSIGNED", oldSnapshot, newSnapshot));
++      await insertEvent(
++        transaction,
++        specializedEvent(
++          promiseId,
++          context,
++          "ASSIGNED",
++          oldSnapshot,
++          newSnapshot,
++        ),
++      );
+     }
+     if (toDateString(locked.due_date) !== promise.dueDate) {
+-      await insertEvent(transaction, specializedEvent(promiseId, context, "DUE_DATE_CHANGED", oldSnapshot, newSnapshot));
++      await insertEvent(
++        transaction,
++        specializedEvent(
++          promiseId,
++          context,
++          "DUE_DATE_CHANGED",
++          oldSnapshot,
++          newSnapshot,
++        ),
++      );
+     }
+-    if (safeInteger(locked.promised_amount_minor, "promised amount") !== promise.promisedAmountMinor) {
+-      await insertEvent(transaction, specializedEvent(promiseId, context, "AMOUNT_CHANGED", oldSnapshot, newSnapshot));
++    if (
++      safeInteger(locked.promised_amount_minor, "promised amount") !==
++      promise.promisedAmountMinor
++    ) {
++      await insertEvent(
++        transaction,
++        specializedEvent(
++          promiseId,
++          context,
++          "AMOUNT_CHANGED",
++          oldSnapshot,
++          newSnapshot,
++        ),
++      );
+     }
+-    await insertStatusEventIfChanged(transaction, locked.base_status, promise, context, oldSnapshot, newSnapshot);
+-    await insertAudit(transaction, context, "promises.update", promiseId, oldSnapshot, newSnapshot);
++    await insertStatusEventIfChanged(
++      transaction,
++      locked.base_status,
++      promise,
++      context,
++      oldSnapshot,
++      newSnapshot,
++    );
++    await insertAudit(
++      transaction,
++      context,
++      "promises.update",
++      promiseId,
++      oldSnapshot,
++      newSnapshot,
++    );
+     return Object.freeze({ promise, replayed: false });
+   });
+ }
+@@ -552,6 +708,7 @@
+   promiseId: string,
+   input: AddFollowUpInput,
+   context: PromiseCommandContext,
++  representativeScopeId?: string,
+ ): Promise<{
+   readonly promise: PaymentPromise;
+   readonly followUp: PaymentPromiseFollowUp;
+@@ -567,13 +724,22 @@
+         throw new PromiseIdempotencyConflictError();
+       }
+       return Object.freeze({
+-        promise: await requirePromiseById(transaction, promiseId),
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
+         followUp: mapFollowUpRow(existingRows[0]),
+         replayed: true,
+       });
+     }
+ 
+-    const before = await requirePromiseById(transaction, promiseId);
++    await lockPromise(transaction, promiseId, representativeScopeId);
++    const before = await requirePromiseById(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     const inserted = await transaction.unsafe<{ id: string }[]>(
+       `
+         INSERT INTO payment_promise_followups (
+@@ -607,13 +773,20 @@
+     );
+     const followUp = followUpRows[0];
+     if (!followUp) throw new Error("تعذر استرجاع متابعة الوعد.");
+-    const promise = await requirePromiseById(transaction, promiseId);
++    const promise = await requirePromiseById(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
+     await insertEvent(transaction, {
+       promiseId,
+       context,
+       eventType: "FOLLOW_UP_ADDED",
+       oldValues: promiseSnapshot(before),
+-      newValues: { followUp: followUpSnapshot(followUp), promise: promiseSnapshot(promise) },
++      newValues: {
++        followUp: followUpSnapshot(followUp),
++        promise: promiseSnapshot(promise),
++      },
+       operationPayload: normalizePayload(input),
+       reason: null,
+       sourceEntity: "PAYMENT_PROMISE_FOLLOWUP",
+@@ -626,9 +799,16 @@
+       "promises.follow_up",
+       promiseId,
+       promiseSnapshot(before),
+-      { followUp: followUpSnapshot(followUp), promise: promiseSnapshot(promise) },
+-    );
+-    return Object.freeze({ promise, followUp: mapFollowUpRow(followUp), replayed: false });
++      {
++        followUp: followUpSnapshot(followUp),
++        promise: promiseSnapshot(promise),
++      },
++    );
++    return Object.freeze({
++      promise,
++      followUp: mapFollowUpRow(followUp),
++      replayed: false,
++    });
+   });
+ }
+ 
+@@ -637,8 +817,17 @@
+   promiseId: string,
+   input: RejectPromiseInput,
+   context: PromiseCommandContext,
++  representativeScopeId?: string,
+ ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
+-  return terminalTransition(sql, promiseId, input.version, input.reason, "REJECTED", context);
++  return terminalTransition(
++    sql,
++    promiseId,
++    input.version,
++    input.reason,
++    "REJECTED",
++    context,
++    representativeScopeId,
++  );
+ }
+ 
+ export async function cancelPromisePostgres(
+@@ -646,8 +835,17 @@
+   promiseId: string,
+   input: CancelPromiseInput,
+   context: PromiseCommandContext,
++  representativeScopeId?: string,
+ ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
+-  return terminalTransition(sql, promiseId, input.version, input.reason, "CANCELLED", context);
++  return terminalTransition(
++    sql,
++    promiseId,
++    input.version,
++    input.reason,
++    "CANCELLED",
++    context,
++    representativeScopeId,
++  );
+ }
+ 
+ export async function escalatePromisePostgres(
+@@ -655,18 +853,61 @@
+   promiseId: string,
+   input: EscalatePromiseInput,
+   context: PromiseCommandContext,
++  representativeScopeId?: string,
+ ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
+   return sql.begin(async (transaction) => {
+     const payload = normalizePayload(input);
+-    if (await findOperationReplay(transaction, promiseId, "ESCALATED", context.idempotencyKey, payload)) {
+-      return Object.freeze({ promise: await requirePromiseById(transaction, promiseId), replayed: true });
++    if (
++      await findOperationReplay(
++        transaction,
++        promiseId,
++        "ESCALATED",
++        context.idempotencyKey,
++        payload,
++      )
++    ) {
++      return Object.freeze({
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
++        replayed: true,
++      });
++    }
++    const locked = await lockPromise(
++      transaction,
++      promiseId,
++      representativeScopeId,
++    );
++    if (
++      await findOperationReplay(
++        transaction,
++        promiseId,
++        "ESCALATED",
++        context.idempotencyKey,
++        payload,
++      )
++    ) {
++      return Object.freeze({
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
++        replayed: true,
++      });
+     }
+-    const locked = await lockPromise(transaction, promiseId);
+     assertVersion(locked, input.version);
+     assertOpenPromise(locked);
+-    const currentLevel = safeInteger(locked.escalation_level, "escalation level");
++    const currentLevel = safeInteger(
++      locked.escalation_level,
++      "escalation level",
