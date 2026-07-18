@@ -40,15 +40,22 @@ jobs:
           for part in "${parts[@]}"; do
             test -f "$part"
           done
-          cat "${parts[@]}" > /tmp/review-fixes-full.patch
-          wc -c /tmp/review-fixes-full.patch
-          sha256sum /tmp/review-fixes-full.patch
-          test "$(wc -c < /tmp/review-fixes-full.patch)" -eq 80486
-          echo "0243d4b51298aba897b7f0852d425e6f89ae41f798f6f299d2434590d504b8b7  /tmp/review-fixes-full.patch" | sha256sum -c -
+          cat "${parts[@]}" > /tmp/review-fixes-uploaded.patch
+          test "$(wc -c < /tmp/review-fixes-uploaded.patch)" -eq 80569
+          echo "1773bf68f6a497ecaa0cace874f6d10a7892b63d48c118660f1670d90dc6cf2b  /tmp/review-fixes-uploaded.patch" | sha256sum -c -
 
           python - <<'PY'
           from pathlib import Path
-          source = Path('/tmp/review-fixes-full.patch').read_text()
+          source = Path('/tmp/review-fixes-uploaded.patch').read_text()
+          source = source.replace(
+              '+      "escalation level",\n+      "escalation level",\n',
+              '+      "escalation level",\n',
+          )
+          source = source.replace(
+              '+      context,\n+      oldSnapshot,\n+      newSnapshot,\n'
+              '+      context,\n+      oldSnapshot,\n+      newSnapshot,\n',
+              '+      context,\n+      oldSnapshot,\n+      newSnapshot,\n',
+          )
           sections = []
           current = ''
           for line in source.splitlines(keepends=True):
@@ -67,8 +74,6 @@ jobs:
           Path('/tmp/review-fixes.patch').write_text(output)
           PY
 
-          wc -c /tmp/review-fixes.patch
-          sha256sum /tmp/review-fixes.patch
           test "$(wc -c < /tmp/review-fixes.patch)" -eq 69741
           echo "cf8cd7143b46403b59cf01358cd386633bdc968e5efa87c468213569e934021a  /tmp/review-fixes.patch" | sha256sum -c -
           git apply --check /tmp/review-fixes.patch
@@ -92,7 +97,7 @@ jobs:
           name: payment-promises-review-fix-diagnostics
           path: |
             /tmp/review-fix.log
-            /tmp/review-fixes-full.patch
+            /tmp/review-fixes-uploaded.patch
             /tmp/review-fixes.patch
           if-no-files-found: ignore
           retention-days: 1
