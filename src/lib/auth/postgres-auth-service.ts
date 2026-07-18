@@ -332,7 +332,7 @@ async function revokeIdleSessionIfExpired(
         ${auditContext.userAgent},
         'IDLE_TIMEOUT',
         'SUCCESS',
-        ${JSON.stringify({ trigger: "SESSION_READ" })}::jsonb
+        jsonb_build_object('trigger', 'SESSION_READ')
       )
     `;
   });
