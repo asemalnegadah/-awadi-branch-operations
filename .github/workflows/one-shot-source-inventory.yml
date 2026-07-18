@@ -1,0 +1,33 @@
+name: One-shot source inventory
+
+on:
+  push:
+    branches:
+      - feature/payment-promises-engine
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/payment-promises-engine
+          fetch-depth: 1
+      - name: Package repository source
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=.next \
+            --exclude=.open-next \
+            --exclude=.wrangler \
+            -czf awadi-source-inventory.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: awadi-source-inventory
+          path: awadi-source-inventory.tar.gz
+          retention-days: 1
