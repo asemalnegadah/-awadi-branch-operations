@@ -21,10 +21,6 @@ export function validateWriteRequestOrigin(
   }
 
   const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase();
-  if (fetchSite === "cross-site" || fetchSite === "same-site") {
-    return { allowed: false, reason: "CROSS_SITE" };
-  }
-
   const origin = parseOrigin(request.headers.get("origin"));
   if (origin) {
     return trustedOrigins.has(origin)
@@ -41,6 +37,10 @@ export function validateWriteRequestOrigin(
 
   if (fetchSite === "same-origin") {
     return { allowed: true };
+  }
+
+  if (fetchSite === "cross-site" || fetchSite === "same-site") {
+    return { allowed: false, reason: "CROSS_SITE" };
   }
 
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE_NAME);

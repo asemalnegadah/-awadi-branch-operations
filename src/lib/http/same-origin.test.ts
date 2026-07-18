@@ -5,7 +5,10 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/session-token";
 
 import { validateWriteRequestOrigin } from "./same-origin";
 
-const trustedOrigins = new Set(["https://app.example.test"]);
+const trustedOrigins = new Set([
+  "https://app.example.test",
+  "https://admin.example.test",
+]);
 
 describe("same-origin write validation", () => {
   it("يسمح بالطلب من الأصل الموثوق", () => {
@@ -20,24 +23,36 @@ describe("same-origin write validation", () => {
     expect(validateWriteRequestOrigin(request, trustedOrigins)).toEqual({ allowed: true });
   });
 
-  it("يرفض Origin غير الموثوق وSec-Fetch-Site عبر المواقع", () => {
+  it("يسمح بأصل متصفح إضافي مصرح به حتى عندما يصفه المتصفح بأنه cross-site", () => {
+    const request = new NextRequest("https://app.example.test/api/action", {
+      method: "POST",
+      headers: {
+        origin: "https://admin.example.test",
+        "sec-fetch-site": "cross-site",
+      },
+    });
+
+    expect(validateWriteRequestOrigin(request, trustedOrigins)).toEqual({ allowed: true });
+  });
+
+  it("يرفض Origin غير الموثوق أو طلبًا عابرًا للمواقع بلا Origin", () => {
     const crossOrigin = new NextRequest("https://app.example.test/api/action", {
       method: "POST",
       headers: { origin: "https://attacker.example" },
     });
-    const crossSite = new NextRequest("https://app.example.test/api/action", {
-      method: "POST",
-      headers: {
-        origin: "https://app.example.test",
-        "sec-fetch-site": "cross-site",
+    const crossSiteWithoutOrigin = new NextRequest(
+      "https://app.example.test/api/action",
+      {
+        method: "POST",
+        headers: { "sec-fetch-site": "cross-site" },
       },
-    });
+    );
 
     expect(validateWriteRequestOrigin(crossOrigin, trustedOrigins)).toEqual({
       allowed: false,
       reason: "UNTRUSTED_ORIGIN",
     });
-    expect(validateWriteRequestOrigin(crossSite, trustedOrigins)).toEqual({
+    expect(validateWriteRequestOrigin(crossSiteWithoutOrigin, trustedOrigins)).toEqual({
       allowed: false,
       reason: "CROSS_SITE",
     });
@@ -74,7 +89,7 @@ describe("same-origin write validation", () => {
   it("يقبل Referer موثوقًا ويرفض Host غير موثوق", () => {
     const referer = new NextRequest("https://app.example.test/api/action", {
       method: "PATCH",
-      headers: { referer: "https://app.example.test/settings/security" },
+      headers: { referer: "https://admin.example.test/settings/security" },
     });
     const untrustedHost = new NextRequest("https://preview.example.test/api/action", {
       method: "DELETE",
