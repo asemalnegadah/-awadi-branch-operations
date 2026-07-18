@@ -10,16 +10,20 @@ import {
   PromiseBusinessRuleError,
   PromiseConflictError,
   PromiseIdempotencyConflictError,
+  PromiseNotFoundError,
 } from "./errors";
 import {
   addFollowUpPostgres,
   allocateConfirmedCollectionPostgres,
   createPromisePostgres,
+  escalatePromisePostgres,
   getCustomerPromiseSummaryPostgres,
   getPromiseDetailsPostgres,
   getPromiseHistoryPostgres,
+  getPromisePostgres,
   getSalespersonPromiseSummaryPostgres,
   listPromisesPostgres,
+  rejectPromisePostgres,
   reverseCollectionAllocationPostgres,
   updatePromisePostgres,
 } from "./postgres-repository";
@@ -33,6 +37,10 @@ const representativeId = randomUUID();
 const customerId = randomUUID();
 const srAccountId = randomUUID();
 const rgAccountId = randomUUID();
+const secondUserId = randomUUID();
+const secondRepresentativeId = randomUUID();
+const secondCustomerId = randomUUID();
+const secondAccountId = randomUUID();
 const runKey = randomUUID();
 
 const actor: AuthenticatedUser = {
@@ -224,27 +232,40 @@ beforeAll(async () => {
     VALUES
       (${actorId}, ${actor.email}, ${actor.fullName}, 'ACTIVE'),
       (${reviewerId}, ${`promise.reviewer.${runKey}@example.test`}, 'مراجع وعود', 'ACTIVE'),
-      (${approverId}, ${`promise.approver.${runKey}@example.test`}, 'معتمد وعود', 'ACTIVE')
+      (${approverId}, ${`promise.approver.${runKey}@example.test`}, 'معتمد وعود', 'ACTIVE'),
+      (${secondUserId}, ${`promise.rep2.${runKey}@example.test`}, 'مندوب ثانٍ', 'ACTIVE')
   `;
   await sql`
     INSERT INTO sales_representatives (
       id, full_name_ar, user_id, representative_type, status
-    ) VALUES (
-      ${representativeId}, 'مندوب وعود التكامل', ${actorId}, 'RETAIL', 'ACTIVE'
-    )
+    ) VALUES
+      (${representativeId}, 'مندوب وعود التكامل', ${actorId}, 'RETAIL', 'ACTIVE'),
+      (${secondRepresentativeId}, 'مندوب وعود ثانٍ', ${secondUserId}, 'RETAIL', 'ACTIVE')
   `;
   await sql`
     INSERT INTO customers (
       id, customer_number, trade_name_ar, created_by, updated_by
-    ) VALUES (
-      ${customerId}, ${`PROMISE-${runKey}`}, 'عميل وعود التكامل', ${actorId}, ${actorId}
-    )
+    ) VALUES
+      (${customerId}, ${`PROMISE-${runKey}`}, 'عميل وعود التكامل', ${actorId}, ${actorId}),
+      (${secondCustomerId}, ${`PROMISE-SECOND-${runKey}`}, 'عميل مندوب ثانٍ', ${actorId}, ${actorId})
   `;
   await sql`
     INSERT INTO customer_accounts (id, customer_id, currency_code, created_by)
     VALUES
       (${srAccountId}, ${customerId}, 'SR', ${actorId}),
-      (${rgAccountId}, ${customerId}, 'RG', ${actorId})
+      (${rgAccountId}, ${customerId}, 'RG', ${actorId}),
+      (${secondAccountId}, ${secondCustomerId}, 'SR', ${actorId})
+  `;
+  await sql`
+    INSERT INTO customer_rep_assignments (
+      customer_id,
+      representative_id,
+      reason,
+      approved_by,
+      created_by
+    ) VALUES
+      (${customerId}, ${representativeId}, 'اختبار نطاق المندوب', ${actorId}, ${actorId}),
+      (${secondCustomerId}, ${secondRepresentativeId}, 'اختبار نطاق مندوب ثانٍ', ${actorId}, ${actorId})
   `;
 });
 
@@ -612,6 +633,224 @@ describe.sequential("PostgreSQL payment promises repository", () => {
       representativeId,
     );
     expect(salespersonSummary?.representativeId).toBe(representativeId);
+  });
+
+  it("يعيد إنشاء الوعد Idempotently بعد تعديل الحقول المتغيرة", async () => {
+    const createKey = "immutable-create-payload";
+    const originalInput = promiseInput({ notes: "الملاحظات الأصلية" });
+    const created = await createPromisePostgres(
+      sql,
+      originalInput,
+      context(createKey),
+    );
+    await updatePromisePostgres(
+      sql,
+      created.promise.id,
+      { version: created.promise.version, notes: "ملاحظات معدلة لاحقًا" },
+      context("immutable-create-later-update"),
+    );
+
+    const replay = await createPromisePostgres(
+      sql,
+      originalInput,
+      context(createKey),
+    );
+    expect(replay.replayed).toBe(true);
+    expect(replay.promise.id).toBe(created.promise.id);
+    expect(replay.promise.notes).toBe("ملاحظات معدلة لاحقًا");
+  });
+
+  it("يعيد الكتابات المتزامنة ذات مفتاح Idempotency نفسه بدل تعارض version", async () => {
+    const promise = await createPromisePostgres(
+      sql,
+      promiseInput(),
+      context("contended-idempotent-write-promise"),
+    );
+    const clientOne = isolatedClient();
+    const clientTwo = isolatedClient();
+    try {
+      const results = await Promise.all([
+        updatePromisePostgres(
+          clientOne,
+          promise.promise.id,
+          { version: promise.promise.version, notes: "كتابة متزامنة" },
+          context("contended-idempotent-update"),
+        ),
+        updatePromisePostgres(
+          clientTwo,
+          promise.promise.id,
+          { version: promise.promise.version, notes: "كتابة متزامنة" },
+          context("contended-idempotent-update"),
+        ),
+      ]);
+      expect(results.map((result) => result.replayed).sort()).toEqual([
+        false,
+        true,
+      ]);
+      const current = await getPromisePostgres(sql, promise.promise.id);
+      expect(current?.version).toBe(promise.promise.version + 1);
+    } finally {
+      await Promise.all([clientOne.end(), clientTwo.end()]);
+    }
+  });
+
+  it("يعيد العمليات النهائية والتصعيد المتزامنة ذات المفتاح نفسه", async () => {
+    const rejectionPromise = await createPromisePostgres(
+      sql,
+      promiseInput(),
+      context("contended-terminal-promise"),
+    );
+    const escalationPromise = await createPromisePostgres(
+      sql,
+      promiseInput(),
+      context("contended-escalation-promise"),
+    );
+    const rejectionClientOne = isolatedClient();
+    const rejectionClientTwo = isolatedClient();
+    const escalationClientOne = isolatedClient();
+    const escalationClientTwo = isolatedClient();
+    try {
+      const rejectionResults = await Promise.all([
+        rejectPromisePostgres(
+          rejectionClientOne,
+          rejectionPromise.promise.id,
+          { version: rejectionPromise.promise.version, reason: "رفض متزامن" },
+          context("contended-terminal-reject"),
+        ),
+        rejectPromisePostgres(
+          rejectionClientTwo,
+          rejectionPromise.promise.id,
+          { version: rejectionPromise.promise.version, reason: "رفض متزامن" },
+          context("contended-terminal-reject"),
+        ),
+      ]);
+      expect(rejectionResults.map((result) => result.replayed).sort()).toEqual([
+        false,
+        true,
+      ]);
+
+      const escalationResults = await Promise.all([
+        escalatePromisePostgres(
+          escalationClientOne,
+          escalationPromise.promise.id,
+          { version: escalationPromise.promise.version, level: 1, reason: "تصعيد متزامن" },
+          context("contended-escalation"),
+        ),
+        escalatePromisePostgres(
+          escalationClientTwo,
+          escalationPromise.promise.id,
+          { version: escalationPromise.promise.version, level: 1, reason: "تصعيد متزامن" },
+          context("contended-escalation"),
+        ),
+      ]);
+      expect(escalationResults.map((result) => result.replayed).sort()).toEqual([
+        false,
+        true,
+      ]);
+    } finally {
+      await Promise.all([
+        rejectionClientOne.end(),
+        rejectionClientTwo.end(),
+        escalationClientOne.end(),
+        escalationClientTwo.end(),
+      ]);
+    }
+  });
+
+  it("يمنع عكس التحصيل قبل عكس تخصيص الوعد ثم يسمح به بعد العكس", async () => {
+    const promise = await createPromisePostgres(
+      sql,
+      promiseInput({ promisedAmountMinor: 3_000 }),
+      context("collection-reversal-guard-promise"),
+    );
+    const collectionId = await createConfirmedCollection(sql, {
+      amountMinor: 3_000,
+    });
+    const allocation = await allocateConfirmedCollectionPostgres(
+      sql,
+      promise.promise.id,
+      { collectionId, amountMinor: 3_000 },
+      context("collection-reversal-guard-allocation"),
+    );
+
+    await expect(
+      sql.begin(async (transaction) => {
+        await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
+        await transaction`
+          UPDATE collections
+          SET state = 'REVERSED',
+              reversed_at = now(),
+              reversed_by = ${reviewerId},
+              reversal_reason = 'محاولة عكس قبل فك الوعد',
+              updated_by = ${reviewerId}
+          WHERE id = ${collectionId}
+        `;
+      }),
+    ).rejects.toThrow(/reverse active payment promise allocations/);
+
+    await reverseCollectionAllocationPostgres(
+      sql,
+      promise.promise.id,
+      allocation.allocation.id,
+      { reason: "فك الربط قبل عكس التحصيل" },
+      context("collection-reversal-guard-release"),
+    );
+    await sql.begin(async (transaction) => {
+      await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
+      await transaction`
+        UPDATE collections
+        SET state = 'REVERSED',
+            reversed_at = now(),
+            reversed_by = ${reviewerId},
+            reversal_reason = 'عكس بعد فك تخصيص الوعد',
+            updated_by = ${reviewerId}
+        WHERE id = ${collectionId}
+      `;
+    });
+    const rows = await sql<{ state: string }[]>`
+      SELECT state FROM collections WHERE id = ${collectionId}
+    `;
+    expect(rows[0]?.state).toBe("REVERSED");
+  });
+
+  it("يقيد قراءة وكتابة المندوب على وعوده فقط", async () => {
+    const own = await createPromisePostgres(
+      sql,
+      promiseInput(),
+      context("representative-scope-own"),
+      representativeId,
+    );
+    const other = await createPromisePostgres(
+      sql,
+      {
+        customerId: secondCustomerId,
+        customerAccountId: secondAccountId,
+        representativeId: secondRepresentativeId,
+        currencyCode: "SR",
+        promisedAmountMinor: 1_000,
+        promiseDate: "2026-07-18",
+        dueDate: "2026-07-20",
+        debtReason: "وعد مندوب آخر",
+      },
+      context("representative-scope-other"),
+    );
+
+    const page = await listPromisesPostgres(
+      sql,
+      { limit: 100 },
+      representativeId,
+    );
+    expect(page.items.some((item) => item.id === own.promise.id)).toBe(true);
+    expect(page.items.some((item) => item.id === other.promise.id)).toBe(false);
+    await expect(
+      updatePromisePostgres(
+        sql,
+        other.promise.id,
+        { version: other.promise.version, notes: "محاولة غير مصرح بها" },
+        context("representative-scope-forbidden-update"),
+        representativeId,
+      ),
+    ).rejects.toBeInstanceOf(PromiseNotFoundError);
   });
 
   it("يتراجع بالكامل إذا فشل تسجيل الحدث داخل Transaction", async () => {

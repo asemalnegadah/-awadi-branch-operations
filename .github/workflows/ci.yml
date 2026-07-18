@@ -8,100 +8,16 @@ on:
       - "agent/**"
       - "chore/**"
       - "feat/**"
-      - "feature/**"
       - "fix/**"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply_review_fixes:
-    name: Apply verified payment promise review fixes
-    if: github.ref == 'refs/heads/feature/payment-promises-engine' || github.head_ref == 'feature/payment-promises-engine'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout review branch
-        uses: actions/checkout@v5
-        with:
-          ref: feature/payment-promises-engine
-          fetch-depth: 0
-
-      - name: Verify and apply review fixes
-        if: hashFiles('.review-fix/part08') != ''
-        run: |
-          exec > >(tee /tmp/review-fix.log) 2>&1
-          set -euo pipefail
-          parts=(.review-fix/part{00..08})
-          for part in "${parts[@]}"; do
-            test -f "$part"
-          done
-          cat "${parts[@]}" > /tmp/review-fixes-uploaded.patch
-          test "$(wc -c < /tmp/review-fixes-uploaded.patch)" -eq 80569
-          echo "1773bf68f6a497ecaa0cace874f6d10a7892b63d48c118660f1670d90dc6cf2b  /tmp/review-fixes-uploaded.patch" | sha256sum -c -
-
-          python - <<'PY'
-          from pathlib import Path
-          source = Path('/tmp/review-fixes-uploaded.patch').read_text()
-          source = source.replace(
-              '+      "escalation level",\n+      "escalation level",\n',
-              '+      "escalation level",\n',
-          )
-          source = source.replace(
-              '+      context,\n+      oldSnapshot,\n+      newSnapshot,\n'
-              '+      context,\n+      oldSnapshot,\n+      newSnapshot,\n',
-              '+      context,\n+      oldSnapshot,\n+      newSnapshot,\n',
-          )
-          sections = []
-          current = ''
-          for line in source.splitlines(keepends=True):
-              if line.startswith('diff --git '):
-                  if current:
-                      sections.append(current)
-                  current = line
-              else:
-                  current += line
-          if current:
-              sections.append(current)
-          output = ''.join(
-              section for section in sections
-              if 'src/lib/promises/service.ts' not in section.splitlines()[0]
-          )
-          Path('/tmp/review-fixes.patch').write_text(output)
-          PY
-
-          test "$(wc -c < /tmp/review-fixes.patch)" -eq 69741
-          echo "cf8cd7143b46403b59cf01358cd386633bdc968e5efa87c468213569e934021a  /tmp/review-fixes.patch" | sha256sum -c -
-          git apply --check /tmp/review-fixes.patch
-          git apply /tmp/review-fixes.patch
-
-          git fetch origin main
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm -rf .review-fix .review-fix2
-          rm -f .github/workflows/one-shot-promises-review-fixes.yml
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix: address payment promises review findings"
-          git push origin HEAD:feature/payment-promises-engine
-
-      - name: Upload review-fix diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: payment-promises-review-fix-diagnostics
-          path: |
-            /tmp/review-fix.log
-            /tmp/review-fixes-uploaded.patch
-            /tmp/review-fixes.patch
-          if-no-files-found: ignore
-          retention-days: 1
-
   quality:
     name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04

@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from "@/lib/auth/types";
 import { AuthorizationError } from "@/lib/auth/types";
 
 const repository = vi.hoisted(() => ({
+  getActiveRepresentativeIdByUserPostgres: vi.fn(),
   createPromisePostgres: vi.fn(),
   getPromisePostgres: vi.fn(),
   getPromiseDetailsPostgres: vi.fn(),
@@ -30,28 +31,37 @@ vi.mock("./postgres-repository", () => repository);
 import {
   allocateConfirmedCollection,
   createPromise,
+  getPromise,
   getPromiseDetails,
+  listPromises,
   reverseCollectionAllocation,
+  updatePromise,
 } from "./service";
 
 const promiseId = "10000000-0000-4000-8000-000000000001";
 const allocationId = "10000000-0000-4000-8000-000000000002";
 
-function actor(permissions: readonly PermissionCode[]): AuthenticatedUser {
+function actor(
+  permissions: readonly PermissionCode[],
+  roles: AuthenticatedUser["roles"] = ["BRANCH_MANAGER"],
+): AuthenticatedUser {
   return {
     id: "10000000-0000-4000-8000-000000000010",
     email: "promise.service@example.test",
     fullName: "مستخدم خدمة الوعود",
-    roles: ["BRANCH_MANAGER"],
+    roles,
     permissions: new Set(permissions),
     operatingMode: "SINGLE_MANAGER",
     mustChangePassword: false,
   };
 }
 
-function commandContext(permissions: readonly PermissionCode[]) {
+function commandContext(
+  permissions: readonly PermissionCode[],
+  roles: AuthenticatedUser["roles"] = ["BRANCH_MANAGER"],
+) {
   return {
-    actor: actor(permissions),
+    actor: actor(permissions, roles),
     request: {
       requestId: "10000000-0000-4000-8000-000000000011",
       ipAddress: "127.0.0.1",
@@ -146,4 +156,86 @@ describe("payment promise service authorization", () => {
     );
     expect(result.events).toEqual([]);
   });
+
+  it("يقيد مستخدم SALES_REP بمندوبه الفعلي في القراءة والقائمة", async () => {
+    const representativeId = "10000000-0000-4000-8000-000000000099";
+    repository.getActiveRepresentativeIdByUserPostgres.mockResolvedValue(
+      representativeId,
+    );
+    repository.getPromisePostgres.mockResolvedValue({ id: promiseId });
+    repository.listPromisesPostgres.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+    });
+    const readContext = {
+      actor: actor(["promises.read"], ["SALES_REP"]),
+    } as const;
+
+    await getPromise({} as never, promiseId, readContext);
+    await listPromises({} as never, { limit: 25 }, readContext);
+
+    expect(repository.getPromisePostgres).toHaveBeenCalledWith(
+      expect.anything(),
+      promiseId,
+      representativeId,
+    );
+    expect(repository.listPromisesPostgres).toHaveBeenCalledWith(
+      expect.anything(),
+      { limit: 25 },
+      representativeId,
+    );
+  });
+
+  it("يرفض إنشاء أو إعادة تعيين وعد لمندوب آخر", async () => {
+    const ownRepresentativeId = "10000000-0000-4000-8000-000000000098";
+    repository.getActiveRepresentativeIdByUserPostgres.mockResolvedValue(
+      ownRepresentativeId,
+    );
+    const scopedContext = commandContext(
+      ["promises.create", "promises.update"],
+      ["SALES_REP"],
+    );
+    const otherRepresentativeId =
+      "10000000-0000-4000-8000-000000000097";
+
+    await expect(
+      createPromise(
+        {} as never,
+        {
+          customerId: promiseId,
+          customerAccountId: promiseId,
+          representativeId: otherRepresentativeId,
+          currencyCode: "SR",
+          promisedAmountMinor: 100,
+          promiseDate: "2026-07-18",
+          dueDate: "2026-07-18",
+          debtReason: "دين",
+        },
+        scopedContext,
+      ),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+
+    await expect(
+      updatePromise(
+        {} as never,
+        promiseId,
+        { version: 1, representativeId: otherRepresentativeId },
+        scopedContext,
+      ),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+    expect(repository.createPromisePostgres).not.toHaveBeenCalled();
+    expect(repository.updatePromisePostgres).not.toHaveBeenCalled();
+  });
+
+  it("يرفض SALES_REP غير المرتبط بسجل مندوب نشط", async () => {
+    repository.getActiveRepresentativeIdByUserPostgres.mockResolvedValue(null);
+    await expect(
+      getPromise(
+        {} as never,
+        promiseId,
+        { actor: actor(["promises.read"], ["SALES_REP"]) },
+      ),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+  });
+
 });

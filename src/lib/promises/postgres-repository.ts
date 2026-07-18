@@ -226,13 +226,40 @@ const promiseJoins = `
     ON representative.id = promise.representative_id
 `;
 
+export async function getActiveRepresentativeIdByUserPostgres(
+  sql: Sql,
+  userId: string,
+): Promise<string | null> {
+  const rows = await sql.unsafe<{ id: string }[]>(
+    `SELECT id
+     FROM sales_representatives
+     WHERE user_id = $1::uuid
+       AND status = 'ACTIVE'
+       AND deleted_at IS NULL
+     LIMIT 1`,
+    [userId],
+  );
+  return rows[0]?.id ?? null;
+}
+
 export async function createPromisePostgres(
   sql: Sql,
   input: CreatePromiseInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
   return sql.begin(async (transaction) => {
-    const payload = normalizePayload(input);
+    if (representativeScopeId) {
+      if (input.representativeId !== representativeScopeId) {
+        throw new PromiseNotFoundError();
+      }
+      await assertActiveRepresentativeAssignment(
+        transaction,
+        representativeScopeId,
+        input.customerId,
+      );
+    }
+    const payload = createOperationPayload(input);
     const inserted = await transaction.unsafe<{ id: string }[]>(
       `
         INSERT INTO payment_promises (
@@ -252,11 +279,12 @@ export async function createPromisePostgres(
           created_at,
           updated_by,
           updated_at,
-          idempotency_key
+          idempotency_key,
+          create_payload
         ) VALUES (
           $1, $2, $3, $4, $5, $6::date, $7::date, $8::timestamptz,
           $9, $10, $11, payment_promise_open_status($7::date),
-          $12, now(), $12, now(), $13
+          $12, now(), $12, now(), $13, $14::jsonb
         )
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING id
@@ -275,12 +303,16 @@ export async function createPromisePostgres(
         input.notes ?? null,
         context.actor.id,
         context.idempotencyKey,
+        JSON.stringify(payload),
       ],
     );
 
     if (!inserted[0]) {
       const existing = await transaction.unsafe<
-        (PromiseLockRow & { idempotency_key: string })[]
+        (PromiseLockRow & {
+          idempotency_key: string;
+          create_payload: unknown;
+        })[]
       >(
         `
           SELECT
@@ -300,7 +332,8 @@ export async function createPromisePostgres(
             base_status,
             escalation_level,
             version,
-            idempotency_key
+            idempotency_key,
+            create_payload
           FROM payment_promises
           WHERE idempotency_key = $1
           FOR UPDATE
@@ -308,14 +341,14 @@ export async function createPromisePostgres(
         [context.idempotencyKey],
       );
       const row = existing[0];
-      if (!row || !sameCreateInput(row, input)) {
+      if (!row || !jsonEqual(row.create_payload, payload)) {
         throw new PromiseIdempotencyConflictError();
       }
-      const promise = await requirePromiseById(transaction, row.id);
+      const promise = await requirePromiseById(transaction, row.id, representativeScopeId);
       return Object.freeze({ promise, replayed: true });
     }
 
-    const promise = await requirePromiseById(transaction, inserted[0].id);
+    const promise = await requirePromiseById(transaction, inserted[0].id, representativeScopeId);
     await insertEvent(transaction, {
       promiseId: promise.id,
       context,
@@ -328,7 +361,14 @@ export async function createPromisePostgres(
       sourceId: null,
       idempotencyKey: null,
     });
-    await insertAudit(transaction, context, "promises.create", promise.id, null, promiseSnapshot(promise));
+    await insertAudit(
+      transaction,
+      context,
+      "promises.create",
+      promise.id,
+      null,
+      promiseSnapshot(promise),
+    );
     return Object.freeze({ promise, replayed: false });
   });
 }
@@ -336,17 +376,29 @@ export async function createPromisePostgres(
 export async function getPromisePostgres(
   sql: Sql,
   promiseId: string,
+  representativeScopeId?: string,
 ): Promise<PaymentPromise | null> {
-  const rows = await selectPromises(sql, "WHERE promise.id = $1", [promiseId]);
+  const rows = await selectPromises(
+    sql,
+    representativeScopeId
+      ? "WHERE promise.id = $1 AND promise.representative_id = $2::uuid"
+      : "WHERE promise.id = $1",
+    representativeScopeId ? [promiseId, representativeScopeId] : [promiseId],
+  );
   return rows[0] ? mapPromiseRow(rows[0]) : null;
 }
 
 export async function getPromiseDetailsPostgres(
   sql: Sql,
   promiseId: string,
+  representativeScopeId?: string,
 ): Promise<PaymentPromiseDetails | null> {
   return sql.begin(async (transaction) => {
-    const promise = await getPromisePostgres(transaction, promiseId);
+    const promise = await getPromisePostgres(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     if (!promise) return null;
     const [events, followUps, allocations] = await Promise.all([
       getPromiseHistoryPostgres(transaction, promiseId),
@@ -360,6 +412,7 @@ export async function getPromiseDetailsPostgres(
 export async function listPromisesPostgres(
   sql: Sql,
   filters: PromiseListFilters,
+  representativeScopeId?: string,
 ): Promise<PromisePage> {
   const conditions: string[] = [];
   const parameters: SqlParameter[] = [];
@@ -368,13 +421,19 @@ export async function listPromisesPostgres(
     conditions.push(clause.replace("?", `$${parameters.length}`));
   };
 
-  if (filters.dueDateFrom) add("promise.due_date >= ?::date", filters.dueDateFrom);
+  if (representativeScopeId) {
+    add("promise.representative_id = ?::uuid", representativeScopeId);
+  }
+  if (filters.dueDateFrom)
+    add("promise.due_date >= ?::date", filters.dueDateFrom);
   if (filters.dueDateTo) add("promise.due_date <= ?::date", filters.dueDateTo);
-  if (filters.customerId) add("promise.customer_id = ?::uuid", filters.customerId);
+  if (filters.customerId)
+    add("promise.customer_id = ?::uuid", filters.customerId);
   if (filters.representativeId) {
     add("promise.representative_id = ?::uuid", filters.representativeId);
   }
-  if (filters.currencyCode) add("promise.currency_code = ?", filters.currencyCode);
+  if (filters.currencyCode)
+    add("promise.currency_code = ?", filters.currencyCode);
   if (filters.baseStatus) add("promise.base_status = ?", filters.baseStatus);
   if (filters.escalationLevel !== undefined) {
     add("promise.escalation_level = ?::smallint", filters.escalationLevel);
@@ -417,7 +476,8 @@ export async function listPromisesPostgres(
   }
 
   parameters.push(filters.limit + 1);
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const where =
+    conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const rows = await selectPromises(
     sql,
     `${where} ORDER BY promise.due_date ASC, promise.created_at ASC, promise.id ASC LIMIT $${parameters.length}`,
@@ -429,13 +489,14 @@ export async function listPromisesPostgres(
   const last = selected.at(-1);
   return Object.freeze({
     items: Object.freeze(items),
-    nextCursor: hasMore && last
-      ? encodeCursor({
-          dueDate: toDateString(last.due_date),
-          createdAt: toIsoString(last.created_at),
-          id: last.id,
-        })
-      : null,
+    nextCursor:
+      hasMore && last
+        ? encodeCursor({
+            dueDate: toDateString(last.due_date),
+            createdAt: toIsoString(last.created_at),
+            id: last.id,
+          })
+        : null,
   });
 }
 
@@ -444,6 +505,7 @@ export async function updatePromisePostgres(
   promiseId: string,
   input: UpdatePromiseInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
   return sql.begin(async (transaction) => {
     const payload = normalizePayload(input);
@@ -455,33 +517,79 @@ export async function updatePromisePostgres(
       payload,
     );
     if (replay) {
-      return Object.freeze({ promise: await requirePromiseById(transaction, promiseId), replayed: true });
+      return Object.freeze({
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
+        replayed: true,
+      });
     }
 
-    const locked = await lockPromise(transaction, promiseId);
+    const locked = await lockPromise(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
+    if (
+      await findOperationReplay(
+        transaction,
+        promiseId,
+        "UPDATED",
+        context.idempotencyKey,
+        payload,
+      )
+    ) {
+      return Object.freeze({
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
+        replayed: true,
+      });
+    }
     assertVersion(locked, input.version);
     assertOpenPromise(locked);
 
-    const finalRepresentativeId = input.representativeId ?? locked.representative_id;
-    const finalPromisedAmount = input.promisedAmountMinor ?? safeInteger(locked.promised_amount_minor, "promised amount");
-    const fulfilledAmount = safeInteger(locked.fulfilled_amount_minor, "fulfilled amount");
+    const finalRepresentativeId =
+      input.representativeId ?? locked.representative_id;
+    const finalPromisedAmount =
+      input.promisedAmountMinor ??
+      safeInteger(locked.promised_amount_minor, "promised amount");
+    const fulfilledAmount = safeInteger(
+      locked.fulfilled_amount_minor,
+      "fulfilled amount",
+    );
     if (finalPromisedAmount < fulfilledAmount) {
-      throw new PromiseBusinessRuleError("لا يمكن خفض مبلغ الوعد عن المبلغ المنفذ فعليًا.");
+      throw new PromiseBusinessRuleError(
+        "لا يمكن خفض مبلغ الوعد عن المبلغ المنفذ فعليًا.",
+      );
     }
-    const finalPromiseDate = input.promiseDate ?? toDateString(locked.promise_date);
+    const finalPromiseDate =
+      input.promiseDate ?? toDateString(locked.promise_date);
     const finalDueDate = input.dueDate ?? toDateString(locked.due_date);
     if (finalDueDate < finalPromiseDate) {
-      throw new PromiseBusinessRuleError("تاريخ الاستحقاق لا يجوز أن يسبق تاريخ الوعد.");
+      throw new PromiseBusinessRuleError(
+        "تاريخ الاستحقاق لا يجوز أن يسبق تاريخ الوعد.",
+      );
     }
     const finalNextFollowUp = Object.hasOwn(input, "nextFollowUpAt")
-      ? input.nextFollowUpAt ?? null
+      ? (input.nextFollowUpAt ?? null)
       : toOptionalIsoString(locked.next_follow_up_at);
     const finalDebtReason = input.debtReason ?? locked.debt_reason;
     const finalDelayReason = Object.hasOwn(input, "delayReason")
-      ? input.delayReason ?? null
+      ? (input.delayReason ?? null)
       : locked.delay_reason;
-    const finalNotes = Object.hasOwn(input, "notes") ? input.notes ?? null : locked.notes;
-    const targetStatus = calculateStatus(fulfilledAmount, finalPromisedAmount, finalDueDate);
+    const finalNotes = Object.hasOwn(input, "notes")
+      ? (input.notes ?? null)
+      : locked.notes;
+    const targetStatus = calculateStatus(
+      fulfilledAmount,
+      finalPromisedAmount,
+      finalDueDate,
+    );
 
     const updated = await transaction.unsafe<{ id: string }[]>(
       `
@@ -517,7 +625,11 @@ export async function updatePromisePostgres(
     );
     if (!updated[0]) throw new PromiseConflictError();
 
-    const promise = await requirePromiseById(transaction, promiseId);
+    const promise = await requirePromiseById(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     const oldSnapshot = lockSnapshot(locked);
     const newSnapshot = promiseSnapshot(promise);
     await insertEvent(transaction, {
@@ -533,16 +645,60 @@ export async function updatePromisePostgres(
       idempotencyKey: context.idempotencyKey,
     });
     if (locked.representative_id !== promise.representativeId) {
-      await insertEvent(transaction, specializedEvent(promiseId, context, "ASSIGNED", oldSnapshot, newSnapshot));
+      await insertEvent(
+        transaction,
+        specializedEvent(
+          promiseId,
+          context,
+          "ASSIGNED",
+          oldSnapshot,
+          newSnapshot,
+        ),
+      );
     }
     if (toDateString(locked.due_date) !== promise.dueDate) {
-      await insertEvent(transaction, specializedEvent(promiseId, context, "DUE_DATE_CHANGED", oldSnapshot, newSnapshot));
+      await insertEvent(
+        transaction,
+        specializedEvent(
+          promiseId,
+          context,
+          "DUE_DATE_CHANGED",
+          oldSnapshot,
+          newSnapshot,
+        ),
+      );
     }
-    if (safeInteger(locked.promised_amount_minor, "promised amount") !== promise.promisedAmountMinor) {
-      await insertEvent(transaction, specializedEvent(promiseId, context, "AMOUNT_CHANGED", oldSnapshot, newSnapshot));
+    if (
+      safeInteger(locked.promised_amount_minor, "promised amount") !==
+      promise.promisedAmountMinor
+    ) {
+      await insertEvent(
+        transaction,
+        specializedEvent(
+          promiseId,
+          context,
+          "AMOUNT_CHANGED",
+          oldSnapshot,
+          newSnapshot,
+        ),
+      );
     }
-    await insertStatusEventIfChanged(transaction, locked.base_status, promise, context, oldSnapshot, newSnapshot);
-    await insertAudit(transaction, context, "promises.update", promiseId, oldSnapshot, newSnapshot);
+    await insertStatusEventIfChanged(
+      transaction,
+      locked.base_status,
+      promise,
+      context,
+      oldSnapshot,
+      newSnapshot,
+    );
+    await insertAudit(
+      transaction,
+      context,
+      "promises.update",
+      promiseId,
+      oldSnapshot,
+      newSnapshot,
+    );
     return Object.freeze({ promise, replayed: false });
   });
 }
@@ -552,6 +708,7 @@ export async function addFollowUpPostgres(
   promiseId: string,
   input: AddFollowUpInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{
   readonly promise: PaymentPromise;
   readonly followUp: PaymentPromiseFollowUp;
@@ -567,13 +724,22 @@ export async function addFollowUpPostgres(
         throw new PromiseIdempotencyConflictError();
       }
       return Object.freeze({
-        promise: await requirePromiseById(transaction, promiseId),
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
         followUp: mapFollowUpRow(existingRows[0]),
         replayed: true,
       });
     }
 
-    const before = await requirePromiseById(transaction, promiseId);
+    await lockPromise(transaction, promiseId, representativeScopeId);
+    const before = await requirePromiseById(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     const inserted = await transaction.unsafe<{ id: string }[]>(
       `
         INSERT INTO payment_promise_followups (
@@ -607,13 +773,20 @@ export async function addFollowUpPostgres(
     );
     const followUp = followUpRows[0];
     if (!followUp) throw new Error("تعذر استرجاع متابعة الوعد.");
-    const promise = await requirePromiseById(transaction, promiseId);
+    const promise = await requirePromiseById(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     await insertEvent(transaction, {
       promiseId,
       context,
       eventType: "FOLLOW_UP_ADDED",
       oldValues: promiseSnapshot(before),
-      newValues: { followUp: followUpSnapshot(followUp), promise: promiseSnapshot(promise) },
+      newValues: {
+        followUp: followUpSnapshot(followUp),
+        promise: promiseSnapshot(promise),
+      },
       operationPayload: normalizePayload(input),
       reason: null,
       sourceEntity: "PAYMENT_PROMISE_FOLLOWUP",
@@ -626,9 +799,16 @@ export async function addFollowUpPostgres(
       "promises.follow_up",
       promiseId,
       promiseSnapshot(before),
-      { followUp: followUpSnapshot(followUp), promise: promiseSnapshot(promise) },
+      {
+        followUp: followUpSnapshot(followUp),
+        promise: promiseSnapshot(promise),
+      },
     );
-    return Object.freeze({ promise, followUp: mapFollowUpRow(followUp), replayed: false });
+    return Object.freeze({
+      promise,
+      followUp: mapFollowUpRow(followUp),
+      replayed: false,
+    });
   });
 }
 
@@ -637,8 +817,17 @@ export async function rejectPromisePostgres(
   promiseId: string,
   input: RejectPromiseInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
-  return terminalTransition(sql, promiseId, input.version, input.reason, "REJECTED", context);
+  return terminalTransition(
+    sql,
+    promiseId,
+    input.version,
+    input.reason,
+    "REJECTED",
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function cancelPromisePostgres(
@@ -646,8 +835,17 @@ export async function cancelPromisePostgres(
   promiseId: string,
   input: CancelPromiseInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
-  return terminalTransition(sql, promiseId, input.version, input.reason, "CANCELLED", context);
+  return terminalTransition(
+    sql,
+    promiseId,
+    input.version,
+    input.reason,
+    "CANCELLED",
+    context,
+    representativeScopeId,
+  );
 }
 
 export async function escalatePromisePostgres(
@@ -655,18 +853,61 @@ export async function escalatePromisePostgres(
   promiseId: string,
   input: EscalatePromiseInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
   return sql.begin(async (transaction) => {
     const payload = normalizePayload(input);
-    if (await findOperationReplay(transaction, promiseId, "ESCALATED", context.idempotencyKey, payload)) {
-      return Object.freeze({ promise: await requirePromiseById(transaction, promiseId), replayed: true });
+    if (
+      await findOperationReplay(
+        transaction,
+        promiseId,
+        "ESCALATED",
+        context.idempotencyKey,
+        payload,
+      )
+    ) {
+      return Object.freeze({
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
+        replayed: true,
+      });
     }
-    const locked = await lockPromise(transaction, promiseId);
+    const locked = await lockPromise(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
+    if (
+      await findOperationReplay(
+        transaction,
+        promiseId,
+        "ESCALATED",
+        context.idempotencyKey,
+        payload,
+      )
+    ) {
+      return Object.freeze({
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
+        replayed: true,
+      });
+    }
     assertVersion(locked, input.version);
     assertOpenPromise(locked);
-    const currentLevel = safeInteger(locked.escalation_level, "escalation level");
+    const currentLevel = safeInteger(
+      locked.escalation_level,
+      "escalation level",
+    );
     if (input.level <= currentLevel) {
-      throw new PromiseBusinessRuleError("مستوى التصعيد الجديد يجب أن يكون أعلى من المستوى الحالي.");
+      throw new PromiseBusinessRuleError(
+        "مستوى التصعيد الجديد يجب أن يكون أعلى من المستوى الحالي.",
+      );
     }
     const rows = await transaction.unsafe<{ id: string }[]>(
       `
@@ -680,7 +921,11 @@ export async function escalatePromisePostgres(
       [input.level, input.reason, context.actor.id, promiseId, input.version],
     );
     if (!rows[0]) throw new PromiseConflictError();
-    const promise = await requirePromiseById(transaction, promiseId);
+    const promise = await requirePromiseById(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     const oldSnapshot = lockSnapshot(locked);
     const newSnapshot = promiseSnapshot(promise);
     await insertEvent(transaction, {
@@ -695,7 +940,15 @@ export async function escalatePromisePostgres(
       sourceId: null,
       idempotencyKey: context.idempotencyKey,
     });
-    await insertAudit(transaction, context, "promises.escalate", promiseId, oldSnapshot, newSnapshot, input.reason);
+    await insertAudit(
+      transaction,
+      context,
+      "promises.escalate",
+      promiseId,
+      oldSnapshot,
+      newSnapshot,
+      input.reason,
+    );
     return Object.freeze({ promise, replayed: false });
   });
 }
@@ -705,6 +958,7 @@ export async function allocateConfirmedCollectionPostgres(
   promiseId: string,
   input: AllocateCollectionInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{
   readonly promise: PaymentPromise;
   readonly allocation: PaymentPromiseAllocation;
@@ -720,13 +974,21 @@ export async function allocateConfirmedCollectionPostgres(
         throw new PromiseIdempotencyConflictError();
       }
       return Object.freeze({
-        promise: await requirePromiseById(transaction, promiseId),
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
         allocation: mapAllocationRow(existingRows[0]),
         replayed: true,
       });
     }
 
-    const lockedPromise = await lockPromise(transaction, promiseId);
+    const lockedPromise = await lockPromise(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     assertOpenPromise(lockedPromise);
     const collection = await lockCollection(transaction, input.collectionId);
     validateCollectionForPromise(lockedPromise, collection);
@@ -745,15 +1007,31 @@ export async function allocateConfirmedCollectionPostgres(
         [input.collectionId],
       ),
     ]);
-    const promiseAllocated = safeInteger(promiseTotalRows[0]?.total ?? 0, "promise allocation total");
-    const collectionAllocated = safeInteger(collectionTotalRows[0]?.total ?? 0, "collection allocation total");
-    const promisedAmount = safeInteger(lockedPromise.promised_amount_minor, "promised amount");
-    const collectionAmount = safeInteger(collection.amount_minor, "collection amount");
+    const promiseAllocated = safeInteger(
+      promiseTotalRows[0]?.total ?? 0,
+      "promise allocation total",
+    );
+    const collectionAllocated = safeInteger(
+      collectionTotalRows[0]?.total ?? 0,
+      "collection allocation total",
+    );
+    const promisedAmount = safeInteger(
+      lockedPromise.promised_amount_minor,
+      "promised amount",
+    );
+    const collectionAmount = safeInteger(
+      collection.amount_minor,
+      "collection amount",
+    );
     if (promiseAllocated + input.amountMinor > promisedAmount) {
-      throw new PromiseBusinessRuleError("مبلغ الربط يتجاوز الرصيد المتبقي في الوعد.");
+      throw new PromiseBusinessRuleError(
+        "مبلغ الربط يتجاوز الرصيد المتبقي في الوعد.",
+      );
     }
     if (collectionAllocated + input.amountMinor > collectionAmount) {
-      throw new PromiseBusinessRuleError("مبلغ الربط يتجاوز الرصيد المتاح في التحصيل.");
+      throw new PromiseBusinessRuleError(
+        "مبلغ الربط يتجاوز الرصيد المتاح في التحصيل.",
+      );
     }
 
     const inserted = await transaction.unsafe<{ id: string }[]>(
@@ -789,7 +1067,11 @@ export async function allocateConfirmedCollectionPostgres(
         throw new PromiseIdempotencyConflictError();
       }
       return Object.freeze({
-        promise: await requirePromiseById(transaction, promiseId),
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
         allocation: mapAllocationRow(raced[0]),
         replayed: true,
       });
@@ -801,7 +1083,11 @@ export async function allocateConfirmedCollectionPostgres(
     );
     const allocation = allocationRows[0];
     if (!allocation) throw new Error("تعذر استرجاع ربط التحصيل.");
-    const promise = await requirePromiseById(transaction, promiseId);
+    const promise = await requirePromiseById(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     const oldSnapshot = lockSnapshot(lockedPromise);
     const newSnapshot = promiseSnapshot(promise);
     await insertEvent(transaction, {
@@ -809,14 +1095,24 @@ export async function allocateConfirmedCollectionPostgres(
       context,
       eventType: "COLLECTION_ALLOCATED",
       oldValues: oldSnapshot,
-      newValues: { allocation: allocationSnapshot(allocation), promise: newSnapshot },
+      newValues: {
+        allocation: allocationSnapshot(allocation),
+        promise: newSnapshot,
+      },
       operationPayload: normalizePayload(input),
       reason: null,
       sourceEntity: "COLLECTION",
       sourceId: input.collectionId,
       idempotencyKey: context.idempotencyKey,
     });
-    await insertStatusEventIfChanged(transaction, lockedPromise.base_status, promise, context, oldSnapshot, newSnapshot);
+    await insertStatusEventIfChanged(
+      transaction,
+      lockedPromise.base_status,
+      promise,
+      context,
+      oldSnapshot,
+      newSnapshot,
+    );
     await insertAudit(
       transaction,
       context,
@@ -825,7 +1121,11 @@ export async function allocateConfirmedCollectionPostgres(
       oldSnapshot,
       { allocation: allocationSnapshot(allocation), promise: newSnapshot },
     );
-    return Object.freeze({ promise, allocation: mapAllocationRow(allocation), replayed: false });
+    return Object.freeze({
+      promise,
+      allocation: mapAllocationRow(allocation),
+      replayed: false,
+    });
   });
 }
 
@@ -835,6 +1135,7 @@ export async function reverseCollectionAllocationPostgres(
   allocationId: string,
   input: ReverseAllocationInput,
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{
   readonly promise: PaymentPromise;
   readonly allocation: PaymentPromiseAllocation;
@@ -854,7 +1155,11 @@ export async function reverseCollectionAllocationPostgres(
         throw new PromiseIdempotencyConflictError();
       }
       return Object.freeze({
-        promise: await requirePromiseById(transaction, promiseId),
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
         allocation: mapAllocationRow(replayRows[0]),
         replayed: true,
       });
@@ -869,9 +1174,14 @@ export async function reverseCollectionAllocationPostgres(
       [allocationId],
     );
     const seed = seedRows[0];
-    if (!seed || seed.promise_id !== promiseId) throw new PromiseNotFoundError();
+    if (!seed || seed.promise_id !== promiseId)
+      throw new PromiseNotFoundError();
 
-    const lockedPromise = await lockPromise(transaction, promiseId);
+    const lockedPromise = await lockPromise(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     await lockCollection(transaction, seed.collection_id);
     const allocationRows = await transaction.unsafe<AllocationRow[]>(
       `${allocationSelect} WHERE allocation.id = $1::uuid FOR UPDATE`,
@@ -904,7 +1214,8 @@ export async function reverseCollectionAllocationPostgres(
         allocationId,
       ],
     );
-    if (!updated[0]) throw new PromiseConflictError("تم عكس هذا الربط من عملية أخرى.");
+    if (!updated[0])
+      throw new PromiseConflictError("تم عكس هذا الربط من عملية أخرى.");
 
     const finalRows = await transaction.unsafe<AllocationRow[]>(
       `${allocationSelect} WHERE allocation.id = $1`,
@@ -912,32 +1223,56 @@ export async function reverseCollectionAllocationPostgres(
     );
     const allocation = finalRows[0];
     if (!allocation) throw new Error("تعذر استرجاع الربط المعكوس.");
-    const promise = await requirePromiseById(transaction, promiseId);
+    const promise = await requirePromiseById(
+      transaction,
+      promiseId,
+      representativeScopeId,
+    );
     const oldSnapshot = lockSnapshot(lockedPromise);
     const newSnapshot = promiseSnapshot(promise);
     await insertEvent(transaction, {
       promiseId,
       context,
       eventType: "COLLECTION_REVERSED",
-      oldValues: { allocation: allocationSnapshot(allocationBefore), promise: oldSnapshot },
-      newValues: { allocation: allocationSnapshot(allocation), promise: newSnapshot },
+      oldValues: {
+        allocation: allocationSnapshot(allocationBefore),
+        promise: oldSnapshot,
+      },
+      newValues: {
+        allocation: allocationSnapshot(allocation),
+        promise: newSnapshot,
+      },
       operationPayload: normalizePayload(input),
       reason: input.reason,
       sourceEntity: "PAYMENT_PROMISE_ALLOCATION",
       sourceId: allocationId,
       idempotencyKey: context.idempotencyKey,
     });
-    await insertStatusEventIfChanged(transaction, lockedPromise.base_status, promise, context, oldSnapshot, newSnapshot);
+    await insertStatusEventIfChanged(
+      transaction,
+      lockedPromise.base_status,
+      promise,
+      context,
+      oldSnapshot,
+      newSnapshot,
+    );
     await insertAudit(
       transaction,
       context,
       "promises.reverse_allocation",
       promiseId,
-      { allocation: allocationSnapshot(allocationBefore), promise: oldSnapshot },
+      {
+        allocation: allocationSnapshot(allocationBefore),
+        promise: oldSnapshot,
+      },
       { allocation: allocationSnapshot(allocation), promise: newSnapshot },
       input.reason,
     );
-    return Object.freeze({ promise, allocation: mapAllocationRow(allocation), replayed: false });
+    return Object.freeze({
+      promise,
+      allocation: mapAllocationRow(allocation),
+      replayed: false,
+    });
   });
 }
 
@@ -975,20 +1310,31 @@ export async function getPromiseHistoryPostgres(
 export async function getDuePromisesPostgres(
   sql: Sql,
   limit = 100,
+  representativeScopeId?: string,
 ): Promise<PromisePage> {
-  return listPromisesPostgres(sql, { temporalStatus: "DUE_TODAY", limit });
+  return listPromisesPostgres(
+    sql,
+    { temporalStatus: "DUE_TODAY", limit },
+    representativeScopeId,
+  );
 }
 
 export async function getOverduePromisesPostgres(
   sql: Sql,
   limit = 100,
+  representativeScopeId?: string,
 ): Promise<PromisePage> {
-  return listPromisesPostgres(sql, { temporalStatus: "OVERDUE", limit });
+  return listPromisesPostgres(
+    sql,
+    { temporalStatus: "OVERDUE", limit },
+    representativeScopeId,
+  );
 }
 
 export async function getCustomerPromiseSummaryPostgres(
   sql: Sql,
   customerId: string,
+  representativeScopeId?: string,
 ): Promise<CustomerPromiseSummary | null> {
   const customerRows = await sql.unsafe<{ id: string; name: string }[]>(
     `SELECT id, trade_name_ar AS name FROM customers
@@ -997,7 +1343,16 @@ export async function getCustomerPromiseSummaryPostgres(
   );
   const customer = customerRows[0];
   if (!customer) return null;
-  const rows = await summaryRows(sql, "promise.customer_id = $1::uuid", [customerId]);
+  const rows = await summaryRows(
+    sql,
+    representativeScopeId
+      ? "promise.customer_id = $1::uuid AND promise.representative_id = $2::uuid"
+      : "promise.customer_id = $1::uuid",
+    representativeScopeId
+      ? [customerId, representativeScopeId]
+      : [customerId],
+  );
+  if (representativeScopeId && rows.length === 0) return null;
   return Object.freeze({
     customerId: customer.id,
     customerName: customer.name,
@@ -1008,7 +1363,11 @@ export async function getCustomerPromiseSummaryPostgres(
 export async function getSalespersonPromiseSummaryPostgres(
   sql: Sql,
   representativeId: string,
+  representativeScopeId?: string,
 ): Promise<SalespersonPromiseSummary | null> {
+  if (representativeScopeId && representativeScopeId !== representativeId) {
+    return null;
+  }
   const representativeRows = await sql.unsafe<{ id: string; name: string }[]>(
     `SELECT id, full_name_ar AS name FROM sales_representatives
      WHERE id = $1::uuid AND deleted_at IS NULL`,
@@ -1016,7 +1375,9 @@ export async function getSalespersonPromiseSummaryPostgres(
   );
   const representative = representativeRows[0];
   if (!representative) return null;
-  const rows = await summaryRows(sql, "promise.representative_id = $1::uuid", [representativeId]);
+  const rows = await summaryRows(sql, "promise.representative_id = $1::uuid", [
+    representativeId,
+  ]);
   return Object.freeze({
     representativeId: representative.id,
     representativeName: representative.name,
@@ -1026,13 +1387,33 @@ export async function getSalespersonPromiseSummaryPostgres(
 
 export async function getPromiseDashboardSummaryPostgres(
   sql: Sql,
+  representativeScopeId?: string,
 ): Promise<readonly CurrencyPromiseSummary[]> {
-  return Object.freeze((await summaryRows(sql, "TRUE", [])).map(mapSummaryRow));
+  return Object.freeze(
+    (
+      await summaryRows(
+        sql,
+        representativeScopeId ? "promise.representative_id = $1::uuid" : "TRUE",
+        representativeScopeId ? [representativeScopeId] : [],
+      )
+    ).map(mapSummaryRow),
+  );
 }
 
 export async function getPromiseFormOptionsPostgres(
   sql: Sql,
+  representativeScopeId?: string,
 ): Promise<PromiseFormOptions> {
+  const accountParameters: SqlParameter[] = [];
+  const assignmentJoin = representativeScopeId
+    ? `JOIN customer_rep_assignments AS assignment
+         ON assignment.customer_id = customer.id
+        AND assignment.representative_id = $1::uuid
+        AND assignment.valid_from <= now()
+        AND (assignment.valid_until IS NULL OR assignment.valid_until > now())`
+    : "";
+  if (representativeScopeId) accountParameters.push(representativeScopeId);
+
   const [accounts, representatives] = await Promise.all([
     sql.unsafe<
       {
@@ -1042,26 +1423,35 @@ export async function getPromiseFormOptionsPostgres(
         customer_number: string | null;
         currency_code: CurrencyCode;
       }[]
-    >(`
-      SELECT
-        account.id,
-        account.customer_id,
-        customer.trade_name_ar AS customer_name,
-        customer.customer_number,
-        account.currency_code
-      FROM customer_accounts AS account
-      JOIN customers AS customer ON customer.id = account.customer_id
-      WHERE account.status = 'ACTIVE'
-        AND customer.deleted_at IS NULL
-        AND customer.merged_into_customer_id IS NULL
-      ORDER BY customer.trade_name_ar, account.currency_code, account.id
-    `),
-    sql.unsafe<{ id: string; name: string }[]>(`
-      SELECT id, full_name_ar AS name
-      FROM sales_representatives
-      WHERE status = 'ACTIVE' AND deleted_at IS NULL
-      ORDER BY full_name_ar, id
-    `),
+    >(
+      `
+        SELECT DISTINCT
+          account.id,
+          account.customer_id,
+          customer.trade_name_ar AS customer_name,
+          customer.customer_number,
+          account.currency_code
+        FROM customer_accounts AS account
+        JOIN customers AS customer ON customer.id = account.customer_id
+        ${assignmentJoin}
+        WHERE account.status = 'ACTIVE'
+          AND customer.deleted_at IS NULL
+          AND customer.merged_into_customer_id IS NULL
+        ORDER BY customer.trade_name_ar, account.currency_code, account.id
+      `,
+      accountParameters,
+    ),
+    sql.unsafe<{ id: string; name: string }[]>(
+      `
+        SELECT id, full_name_ar AS name
+        FROM sales_representatives
+        WHERE status = 'ACTIVE'
+          AND deleted_at IS NULL
+          AND ($1::uuid IS NULL OR id = $1::uuid)
+        ORDER BY full_name_ar, id
+      `,
+      [representativeScopeId ?? null],
+    ),
   ]);
   return Object.freeze({
     accounts: Object.freeze(
@@ -1076,7 +1466,9 @@ export async function getPromiseFormOptionsPostgres(
       ),
     ),
     representatives: Object.freeze(
-      representatives.map((row) => Object.freeze({ id: row.id, name: row.name })),
+      representatives.map((row) =>
+        Object.freeze({ id: row.id, name: row.name }),
+      ),
     ),
   });
 }
@@ -1084,8 +1476,9 @@ export async function getPromiseFormOptionsPostgres(
 export async function listAvailableConfirmedCollectionsPostgres(
   sql: Sql,
   promiseId: string,
+  representativeScopeId?: string,
 ): Promise<readonly ConfirmedCollectionOption[]> {
-  const promise = await locklessPromise(sql, promiseId);
+  const promise = await locklessPromise(sql, promiseId, representativeScopeId);
   if (!promise) return [];
   const rows = await sql.unsafe<
     {
@@ -1130,7 +1523,10 @@ export async function listAvailableConfirmedCollectionsPostgres(
         receiptNumber: row.receipt_number,
         collectedAt: toIsoString(row.collected_at),
         amountMinor: safeInteger(row.amount_minor, "collection amount"),
-        availableAmountMinor: safeInteger(row.available_amount_minor, "available collection amount"),
+        availableAmountMinor: safeInteger(
+          row.available_amount_minor,
+          "available collection amount",
+        ),
         currencyCode: row.currency_code,
       }),
     ),
@@ -1144,22 +1540,51 @@ async function terminalTransition(
   reason: string,
   status: "REJECTED" | "CANCELLED",
   context: PromiseCommandContext,
+  representativeScopeId?: string,
 ): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
   return sql.begin(async (transaction) => {
     const eventType: PromiseEventType = status;
     const payload = normalizePayload({ version, reason });
-    if (await findOperationReplay(transaction, promiseId, eventType, context.idempotencyKey, payload)) {
-      return Object.freeze({ promise: await requirePromiseById(transaction, promiseId), replayed: true });
+    if (
+      await findOperationReplay(
+        transaction,
+        promiseId,
+        eventType,
+        context.idempotencyKey,
+        payload,
+      )
+    ) {
+      return Object.freeze({
+        promise: await requirePromiseById(transaction, promiseId, representativeScopeId),
+        replayed: true,
+      });
     }
-    const locked = await lockPromise(transaction, promiseId);
+    const locked = await lockPromise(transaction, promiseId, representativeScopeId);
+    if (
+      await findOperationReplay(
+        transaction,
+        promiseId,
+        eventType,
+        context.idempotencyKey,
+        payload,
+      )
+    ) {
+      return Object.freeze({
+        promise: await requirePromiseById(transaction, promiseId, representativeScopeId),
+        replayed: true,
+      });
+    }
     assertVersion(locked, version);
     assertOpenPromise(locked);
     if (safeInteger(locked.fulfilled_amount_minor, "fulfilled amount") !== 0) {
-      throw new PromiseBusinessRuleError("اعكس جميع روابط التحصيل قبل رفض الوعد أو إلغائه.");
+      throw new PromiseBusinessRuleError(
+        "اعكس جميع روابط التحصيل قبل رفض الوعد أو إلغائه.",
+      );
     }
-    const columns = status === "REJECTED"
-      ? "rejected_at = now(), rejected_by = $1, rejection_reason = $2"
-      : "cancelled_at = now(), cancelled_by = $1, cancellation_reason = $2";
+    const columns =
+      status === "REJECTED"
+        ? "rejected_at = now(), rejected_by = $1, rejection_reason = $2"
+        : "cancelled_at = now(), cancelled_by = $1, cancellation_reason = $2";
     const rows = await transaction.unsafe<{ id: string }[]>(
       `UPDATE payment_promises
        SET base_status = $3,
@@ -1171,7 +1596,7 @@ async function terminalTransition(
       [context.actor.id, reason, status, promiseId, version],
     );
     if (!rows[0]) throw new PromiseConflictError();
-    const promise = await requirePromiseById(transaction, promiseId);
+    const promise = await requirePromiseById(transaction, promiseId, representativeScopeId);
     const oldSnapshot = lockSnapshot(locked);
     const newSnapshot = promiseSnapshot(promise);
     await insertEvent(transaction, {
@@ -1186,7 +1611,15 @@ async function terminalTransition(
       sourceId: null,
       idempotencyKey: context.idempotencyKey,
     });
-    await insertAudit(transaction, context, `promises.${status === "REJECTED" ? "reject" : "cancel"}`, promiseId, oldSnapshot, newSnapshot, reason);
+    await insertAudit(
+      transaction,
+      context,
+      `promises.${status === "REJECTED" ? "reject" : "cancel"}`,
+      promiseId,
+      oldSnapshot,
+      newSnapshot,
+      reason,
+    );
     return Object.freeze({ promise, replayed: false });
   });
 }
@@ -1348,7 +1781,8 @@ async function insertStatusEventIfChanged(
 ): Promise<void> {
   if (oldStatus === promise.baseStatus) return;
   let eventType: PromiseEventType | null = null;
-  if (promise.baseStatus === "PARTIALLY_FULFILLED") eventType = "PARTIALLY_FULFILLED";
+  if (promise.baseStatus === "PARTIALLY_FULFILLED")
+    eventType = "PARTIALLY_FULFILLED";
   if (promise.baseStatus === "FULFILLED") eventType = "FULFILLED";
   if (
     (oldStatus === "FULFILLED" || oldStatus === "PARTIALLY_FULFILLED") &&
@@ -1403,13 +1837,40 @@ async function selectPromises(
   );
 }
 
-async function requirePromiseById(sql: Sql, promiseId: string): Promise<PaymentPromise> {
-  const promise = await getPromisePostgres(sql, promiseId);
+async function assertActiveRepresentativeAssignment(
+  sql: Sql,
+  representativeId: string,
+  customerId: string,
+): Promise<void> {
+  const rows = await sql.unsafe<{ allowed: boolean }[]>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM customer_rep_assignments
+       WHERE customer_id = $1::uuid
+         AND representative_id = $2::uuid
+         AND valid_from <= now()
+         AND (valid_until IS NULL OR valid_until > now())
+     ) AS allowed`,
+    [customerId, representativeId],
+  );
+  if (!rows[0]?.allowed) throw new PromiseNotFoundError();
+}
+
+async function requirePromiseById(
+  sql: Sql,
+  promiseId: string,
+  representativeScopeId?: string,
+): Promise<PaymentPromise> {
+  const promise = await getPromisePostgres(sql, promiseId, representativeScopeId);
   if (!promise) throw new PromiseNotFoundError();
   return promise;
 }
 
-async function lockPromise(transaction: Sql, promiseId: string): Promise<PromiseLockRow> {
+async function lockPromise(
+  transaction: Sql,
+  promiseId: string,
+  representativeScopeId?: string,
+): Promise<PromiseLockRow> {
   const rows = await transaction.unsafe<PromiseLockRow[]>(
     `
       SELECT
@@ -1431,15 +1892,20 @@ async function lockPromise(transaction: Sql, promiseId: string): Promise<Promise
         version
       FROM payment_promises
       WHERE id = $1::uuid
+        AND ($2::uuid IS NULL OR representative_id = $2::uuid)
       FOR UPDATE
     `,
-    [promiseId],
+    [promiseId, representativeScopeId ?? null],
   );
   if (!rows[0]) throw new PromiseNotFoundError();
   return rows[0];
 }
 
-async function locklessPromise(sql: Sql, promiseId: string): Promise<PromiseLockRow | null> {
+async function locklessPromise(
+  sql: Sql,
+  promiseId: string,
+  representativeScopeId?: string,
+): Promise<PromiseLockRow | null> {
   const rows = await sql.unsafe<PromiseLockRow[]>(
     `
       SELECT
@@ -1461,13 +1927,17 @@ async function locklessPromise(sql: Sql, promiseId: string): Promise<PromiseLock
         version
       FROM payment_promises
       WHERE id = $1::uuid
+        AND ($2::uuid IS NULL OR representative_id = $2::uuid)
     `,
-    [promiseId],
+    [promiseId, representativeScopeId ?? null],
   );
   return rows[0] ?? null;
 }
 
-async function lockCollection(transaction: Sql, collectionId: string): Promise<CollectionLockRow> {
+async function lockCollection(
+  transaction: Sql,
+  collectionId: string,
+): Promise<CollectionLockRow> {
   const rows = await transaction.unsafe<CollectionLockRow[]>(
     `
       SELECT
@@ -1487,7 +1957,8 @@ async function lockCollection(transaction: Sql, collectionId: string): Promise<C
     `,
     [collectionId],
   );
-  if (!rows[0]) throw new PromiseBusinessRuleError("التحصيل غير موجود أو غير متاح.");
+  if (!rows[0])
+    throw new PromiseBusinessRuleError("التحصيل غير موجود أو غير متاح.");
   return rows[0];
 }
 
@@ -1495,11 +1966,10 @@ function validateCollectionForPromise(
   promise: PromiseLockRow,
   collection: CollectionLockRow,
 ): void {
-  if (
-    collection.state !== "RECONCILED" &&
-    collection.state !== "CLOSED"
-  ) {
-    throw new PromiseBusinessRuleError("لا يمكن ربط وعد إلا بتحصيل مؤكد ماليًا.");
+  if (collection.state !== "RECONCILED" && collection.state !== "CLOSED") {
+    throw new PromiseBusinessRuleError(
+      "لا يمكن ربط وعد إلا بتحصيل مؤكد ماليًا.",
+    );
   }
   if (!collection.ledger_entry_id || collection.reversed_at) {
     throw new PromiseBusinessRuleError("التحصيل غير مؤكد أو تم عكسه.");
@@ -1508,7 +1978,9 @@ function validateCollectionForPromise(
     collection.customer_id !== promise.customer_id ||
     collection.customer_account_id !== promise.customer_account_id
   ) {
-    throw new PromiseBusinessRuleError("التحصيل لا يخص العميل وحساب العملة المحددين في الوعد.");
+    throw new PromiseBusinessRuleError(
+      "التحصيل لا يخص العميل وحساب العملة المحددين في الوعد.",
+    );
   }
   if (collection.currency_code !== promise.currency_code) {
     throw new PromiseBusinessRuleError("عملة التحصيل لا تطابق عملة الوعد.");
@@ -1623,9 +2095,18 @@ function mapPromiseRow(row: PromiseRow): PaymentPromise {
     representativeId: row.representative_id,
     representativeName: row.representative_name,
     currencyCode: row.currency_code,
-    promisedAmountMinor: safeInteger(row.promised_amount_minor, "promised amount"),
-    fulfilledAmountMinor: safeInteger(row.fulfilled_amount_minor, "fulfilled amount"),
-    remainingAmountMinor: safeInteger(row.remaining_amount_minor, "remaining amount"),
+    promisedAmountMinor: safeInteger(
+      row.promised_amount_minor,
+      "promised amount",
+    ),
+    fulfilledAmountMinor: safeInteger(
+      row.fulfilled_amount_minor,
+      "fulfilled amount",
+    ),
+    remainingAmountMinor: safeInteger(
+      row.remaining_amount_minor,
+      "remaining amount",
+    ),
     promiseDate: toDateString(row.promise_date),
     dueDate: toDateString(row.due_date),
     nextFollowUpAt: toOptionalIsoString(row.next_follow_up_at),
@@ -1700,30 +2181,26 @@ function mapSummaryRow(row: SummaryRow): CurrencyPromiseSummary {
   return Object.freeze({
     currencyCode: row.currency_code,
     promiseCount: safeInteger(row.promise_count, "promise count"),
-    promisedAmountMinor: safeInteger(row.promised_amount_minor, "promised summary"),
-    fulfilledAmountMinor: safeInteger(row.fulfilled_amount_minor, "fulfilled summary"),
-    remainingAmountMinor: safeInteger(row.remaining_amount_minor, "remaining summary"),
+    promisedAmountMinor: safeInteger(
+      row.promised_amount_minor,
+      "promised summary",
+    ),
+    fulfilledAmountMinor: safeInteger(
+      row.fulfilled_amount_minor,
+      "fulfilled summary",
+    ),
+    remainingAmountMinor: safeInteger(
+      row.remaining_amount_minor,
+      "remaining summary",
+    ),
     dueTodayCount: safeInteger(row.due_today_count, "due today count"),
     overdueCount: safeInteger(row.overdue_count, "overdue count"),
-    partiallyFulfilledCount: safeInteger(row.partially_fulfilled_count, "partial count"),
+    partiallyFulfilledCount: safeInteger(
+      row.partially_fulfilled_count,
+      "partial count",
+    ),
     fulfilledCount: safeInteger(row.fulfilled_count, "fulfilled count"),
   });
-}
-
-function sameCreateInput(row: PromiseLockRow, input: CreatePromiseInput): boolean {
-  return (
-    row.customer_id === input.customerId &&
-    row.customer_account_id === input.customerAccountId &&
-    row.representative_id === input.representativeId &&
-    row.currency_code === input.currencyCode &&
-    safeInteger(row.promised_amount_minor, "promised amount") === input.promisedAmountMinor &&
-    toDateString(row.promise_date) === input.promiseDate &&
-    toDateString(row.due_date) === input.dueDate &&
-    toOptionalIsoString(row.next_follow_up_at) === (input.nextFollowUpAt ?? null) &&
-    row.debt_reason === input.debtReason &&
-    row.delay_reason === (input.delayReason ?? null) &&
-    row.notes === (input.notes ?? null)
-  );
 }
 
 function sameFollowUpInput(
@@ -1734,7 +2211,8 @@ function sameFollowUpInput(
   return (
     row.promise_id === promiseId &&
     toIsoString(row.scheduled_at) === toIsoString(input.scheduledAt) &&
-    toOptionalIsoString(row.completed_at) === (input.completedAt ? toIsoString(input.completedAt) : null) &&
+    toOptionalIsoString(row.completed_at) ===
+      (input.completedAt ? toIsoString(input.completedAt) : null) &&
     row.outcome === (input.outcome ?? null) &&
     row.notes === (input.notes ?? null)
   );
@@ -1753,12 +2231,15 @@ function sameAllocationInput(
 }
 
 function assertVersion(row: PromiseLockRow, expected: number): void {
-  if (safeInteger(row.version, "version") !== expected) throw new PromiseConflictError();
+  if (safeInteger(row.version, "version") !== expected)
+    throw new PromiseConflictError();
 }
 
 function assertOpenPromise(row: PromiseLockRow): void {
   if (!openStatuses.includes(row.base_status)) {
-    throw new PromiseBusinessRuleError("حالة الوعد الحالية لا تسمح بهذه العملية.");
+    throw new PromiseBusinessRuleError(
+      "حالة الوعد الحالية لا تسمح بهذه العملية.",
+    );
   }
 }
 
@@ -1772,7 +2253,9 @@ function calculateStatus(
   return dueDate > adenDateString(new Date()) ? "UPCOMING" : "NEW";
 }
 
-function promiseSnapshot(promise: PaymentPromise): Readonly<Record<string, unknown>> {
+function promiseSnapshot(
+  promise: PaymentPromise,
+): Readonly<Record<string, unknown>> {
   return Object.freeze({
     id: promise.id,
     customerId: promise.customerId,
@@ -1828,7 +2311,9 @@ function followUpSnapshot(row: FollowUpRow): Readonly<Record<string, unknown>> {
   });
 }
 
-function allocationSnapshot(row: AllocationRow): Readonly<Record<string, unknown>> {
+function allocationSnapshot(
+  row: AllocationRow,
+): Readonly<Record<string, unknown>> {
   return Object.freeze({
     id: row.id,
     collectionId: row.collection_id,
@@ -1840,8 +2325,28 @@ function allocationSnapshot(row: AllocationRow): Readonly<Record<string, unknown
   });
 }
 
+function createOperationPayload(
+  input: CreatePromiseInput,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    customerId: input.customerId,
+    customerAccountId: input.customerAccountId,
+    representativeId: input.representativeId,
+    currencyCode: input.currencyCode,
+    promisedAmountMinor: input.promisedAmountMinor,
+    promiseDate: input.promiseDate,
+    dueDate: input.dueDate,
+    nextFollowUpAt: input.nextFollowUpAt ?? null,
+    debtReason: input.debtReason,
+    delayReason: input.delayReason ?? null,
+    notes: input.notes ?? null,
+  });
+}
+
 function normalizePayload(value: object): Readonly<Record<string, unknown>> {
-  return Object.freeze(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
+  return Object.freeze(
+    JSON.parse(JSON.stringify(value)) as Record<string, unknown>,
+  );
 }
 
 function jsonEqual(left: unknown, right: unknown): boolean {
@@ -1872,8 +2377,11 @@ function encodeCursor(value: CursorPayload): string {
 
 function decodeCursor(value: string): CursorPayload {
   try {
-    const parsed: unknown = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    if (!parsed || typeof parsed !== "object") throw new Error("invalid cursor");
+    const parsed: unknown = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    );
+    if (!parsed || typeof parsed !== "object")
+      throw new Error("invalid cursor");
     const record = parsed as Record<string, unknown>;
     if (
       typeof record.dueDate !== "string" ||
@@ -1885,7 +2393,11 @@ function decodeCursor(value: string): CursorPayload {
     ) {
       throw new Error("invalid cursor");
     }
-    return { dueDate: record.dueDate, createdAt: record.createdAt, id: record.id };
+    return {
+      dueDate: record.dueDate,
+      createdAt: record.createdAt,
+      id: record.id,
+    };
   } catch {
     throw new PromiseBusinessRuleError("مؤشر الصفحة غير صالح.");
   }
@@ -1897,13 +2409,15 @@ function escapeLikePattern(value: string): string {
 
 function safeInteger(value: string | number, label: string): number {
   const numeric = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(numeric)) throw new Error(`Stored ${label} is outside the safe integer range.`);
+  if (!Number.isSafeInteger(numeric))
+    throw new Error(`Stored ${label} is outside the safe integer range.`);
   return numeric;
 }
 
 function toIsoString(value: Date | string): string {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) throw new Error("Stored timestamp is invalid.");
+  if (Number.isNaN(date.getTime()))
+    throw new Error("Stored timestamp is invalid.");
   return date.toISOString();
 }
 
@@ -1912,7 +2426,8 @@ function toOptionalIsoString(value: Date | string | null): string | null {
 }
 
 function toDateString(value: Date | string): string {
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value))
+    return value;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) throw new Error("Stored date is invalid.");
   return date.toISOString().slice(0, 10);
@@ -1925,7 +2440,9 @@ function adenDateString(date: Date): string {
     month: "2-digit",
     day: "2-digit",
   }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
   return `${values.year}-${values.month}-${values.day}`;
 }
 
