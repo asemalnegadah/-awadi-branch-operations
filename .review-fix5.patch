@@ -1,0 +1,255 @@
+--- a/src/lib/promises/postgres-repository.ts
++++ b/src/lib/promises/postgres-repository.ts
+@@ -733,6 +733,24 @@
+     }
+ 
+     await lockPromise(transaction, promiseId, representativeScopeId);
++    const contendedRows = await transaction.unsafe<FollowUpRow[]>(
++      `${followUpSelect} WHERE followup.idempotency_key = $1 FOR UPDATE`,
++      [context.idempotencyKey],
++    );
++    if (contendedRows[0]) {
++      if (!sameFollowUpInput(contendedRows[0], promiseId, input)) {
++        throw new PromiseIdempotencyConflictError();
++      }
++      return Object.freeze({
++        promise: await requirePromiseById(
++          transaction,
++          promiseId,
++          representativeScopeId,
++        ),
++        followUp: mapFollowUpRow(contendedRows[0]),
++        replayed: true,
++      });
++    }
+     const before = await requirePromiseById(
+       transaction,
+       promiseId,
+@@ -1190,6 +1208,22 @@
+       throw new PromiseNotFoundError();
+     }
+     if (allocationBefore.reversed_at) {
++      if (
++        allocationBefore.reversal_idempotency_key === context.idempotencyKey
++      ) {
++        if (allocationBefore.reversal_reason !== input.reason) {
++          throw new PromiseIdempotencyConflictError();
++        }
++        return Object.freeze({
++          promise: await requirePromiseById(
++            transaction,
++            promiseId,
++            representativeScopeId,
++          ),
++          allocation: mapAllocationRow(allocationBefore),
++          replayed: true,
++        });
++      }
+       throw new PromiseConflictError("تم عكس هذا الربط مسبقًا.");
+     }
+ 
+@@ -2348,7 +2382,9 @@
+     promisedAmountMinor: input.promisedAmountMinor,
+     promiseDate: input.promiseDate,
+     dueDate: input.dueDate,
+-    nextFollowUpAt: input.nextFollowUpAt ?? null,
++    nextFollowUpAt: input.nextFollowUpAt
++      ? toIsoString(input.nextFollowUpAt)
++      : null,
+     debtReason: input.debtReason,
+     delayReason: input.delayReason ?? null,
+     notes: input.notes ?? null,
+--- a/src/lib/promises/postgres-repository.integration.test.ts
++++ b/src/lib/promises/postgres-repository.integration.test.ts
+@@ -660,6 +660,63 @@
+     expect(replay.promise.notes).toBe("ملاحظات معدلة لاحقًا");
+   });
+ 
++  it("يعيد إنشاء الوعد مع تطبيع nextFollowUpAt ذي الإزاحة الزمنية", async () => {
++    const createKey = "create-offset-timestamp";
++    const input = promiseInput({
++      nextFollowUpAt: "2026-07-20T12:00:00+03:00",
++    });
++    const created = await createPromisePostgres(sql, input, context(createKey));
++    const replay = await createPromisePostgres(sql, input, context(createKey));
++
++    expect(replay.replayed).toBe(true);
++    expect(replay.promise.id).toBe(created.promise.id);
++    const payloadRows = await sql<{ next_follow_up_at: string | null }[]>`
++      SELECT create_payload ->> 'nextFollowUpAt' AS next_follow_up_at
++      FROM payment_promises
++      WHERE id = ${created.promise.id}
++    `;
++    expect(payloadRows[0]?.next_follow_up_at).toBe(
++      "2026-07-20T09:00:00.000Z",
++    );
++  });
++
++  it("يعيد المتابعات المتزامنة ذات مفتاح Idempotency نفسه", async () => {
++    const promise = await createPromisePostgres(
++      sql,
++      promiseInput(),
++      context("contended-followup-promise"),
++    );
++    const clientOne = isolatedClient();
++    const clientTwo = isolatedClient();
++    const input = {
++      scheduledAt: "2026-07-21T09:00:00.000Z",
++      notes: "متابعة متزامنة",
++    };
++    try {
++      const results = await Promise.all([
++        addFollowUpPostgres(
++          clientOne,
++          promise.promise.id,
++          input,
++          context("contended-followup"),
++        ),
++        addFollowUpPostgres(
++          clientTwo,
++          promise.promise.id,
++          input,
++          context("contended-followup"),
++        ),
++      ]);
++      expect(results.map((result) => result.replayed).sort()).toEqual([
++        false,
++        true,
++      ]);
++      expect(results[0]?.followUp.id).toBe(results[1]?.followUp.id);
++    } finally {
++      await Promise.all([clientOne.end(), clientTwo.end()]);
++    }
++  });
++
+   it("يعيد الكتابات المتزامنة ذات مفتاح Idempotency نفسه بدل تعارض version", async () => {
+     const promise = await createPromisePostgres(
+       sql,
+@@ -757,6 +814,52 @@
+     }
+   });
+ 
++  it("يعيد عكس التخصيص المتزامن ذي مفتاح Idempotency نفسه", async () => {
++    const promise = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 2_500 }),
++      context("contended-reversal-promise"),
++    );
++    const collectionId = await createConfirmedCollection(sql, {
++      amountMinor: 2_500,
++    });
++    const allocation = await allocateConfirmedCollectionPostgres(
++      sql,
++      promise.promise.id,
++      { collectionId, amountMinor: 2_500 },
++      context("contended-reversal-allocation"),
++    );
++    const clientOne = isolatedClient();
++    const clientTwo = isolatedClient();
++    try {
++      const results = await Promise.all([
++        reverseCollectionAllocationPostgres(
++          clientOne,
++          promise.promise.id,
++          allocation.allocation.id,
++          { reason: "عكس متزامن" },
++          context("contended-reversal"),
++        ),
++        reverseCollectionAllocationPostgres(
++          clientTwo,
++          promise.promise.id,
++          allocation.allocation.id,
++          { reason: "عكس متزامن" },
++          context("contended-reversal"),
++        ),
++      ]);
++      expect(results.map((result) => result.replayed).sort()).toEqual([
++        false,
++        true,
++      ]);
++      expect(results[0]?.allocation.id).toBe(results[1]?.allocation.id);
++      expect(results[0]?.promise.fulfilledAmountMinor).toBe(0);
++      expect(results[1]?.promise.fulfilledAmountMinor).toBe(0);
++    } finally {
++      await Promise.all([clientOne.end(), clientTwo.end()]);
++    }
++  });
++
+   it("يمنع عكس التحصيل قبل عكس تخصيص الوعد ثم يسمح به بعد العكس", async () => {
+     const promise = await createPromisePostgres(
+       sql,
+--- /dev/null
++++ b/db/migrations/0019_payment_promises_idempotency_canonicalization.sql
+@@ -0,0 +1,53 @@
++BEGIN;
++
++UPDATE payment_promises
++SET create_payload = jsonb_set(
++  create_payload,
++  '{nextFollowUpAt}',
++  CASE
++    WHEN next_follow_up_at IS NULL THEN 'null'::jsonb
++    ELSE to_jsonb(
++      to_char(
++        next_follow_up_at AT TIME ZONE 'UTC',
++        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
++      )
++    )
++  END,
++  true
++);
++
++CREATE OR REPLACE FUNCTION protect_payment_promise_create_payload()
++RETURNS trigger
++LANGUAGE plpgsql
++AS $$
++BEGIN
++  IF TG_OP = 'INSERT' AND NEW.create_payload = '{}'::jsonb THEN
++    NEW.create_payload := jsonb_build_object(
++      'customerId', NEW.customer_id,
++      'customerAccountId', NEW.customer_account_id,
++      'representativeId', NEW.representative_id,
++      'currencyCode', NEW.currency_code,
++      'promisedAmountMinor', NEW.promised_amount_minor,
++      'promiseDate', NEW.promise_date,
++      'dueDate', NEW.due_date,
++      'nextFollowUpAt', CASE
++        WHEN NEW.next_follow_up_at IS NULL THEN NULL
++        ELSE to_char(
++          NEW.next_follow_up_at AT TIME ZONE 'UTC',
++          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
++        )
++      END,
++      'debtReason', NEW.debt_reason,
++      'delayReason', NEW.delay_reason,
++      'notes', NEW.notes
++    );
++  ELSIF TG_OP = 'UPDATE' AND NEW.create_payload IS DISTINCT FROM OLD.create_payload THEN
++    RAISE EXCEPTION 'payment promise create payload is immutable';
++  END IF;
++
++  RETURN NEW;
++END;
++$$;
++
++COMMIT;
+--- /dev/null
++++ b/db/tests/0019_payment_promises_idempotency_canonicalization_smoke.sql
+@@ -0,0 +1,17 @@
++BEGIN;
++
++DO $$
++DECLARE
++  function_definition text;
++BEGIN
++  SELECT pg_get_functiondef('protect_payment_promise_create_payload()'::regprocedure)
++  INTO function_definition;
++
++  IF position('AT TIME ZONE ''UTC''' IN function_definition) = 0
++    OR position('YYYY-MM-DD"T"HH24:MI:SS.MS"Z"' IN function_definition) = 0 THEN
++    RAISE EXCEPTION 'payment promise create timestamp canonicalization is missing';
++  END IF;
++END;
++$$;
++
++ROLLBACK;
