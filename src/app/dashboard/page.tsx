@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 const nextModules = [
   "رفع ومراجعة كشوف Onyx",
   "مطابقة العملاء والعملات",
-  "الوعود والمخاطر",
+  "محرك المخاطر",
   "الخطط اليومية والزيارات",
 ];
 
@@ -75,8 +75,16 @@ export default async function DashboardPage() {
         </article>
       </section>
 
+      {session.user.permissions.has("promises.read") ? (
+        <section className="panel">
+          <h2>وعود السداد</h2>
+          <p>متابعة الوعود والاستحقاقات وربط التحصيلات المؤكدة مع فصل العملات.</p>
+          <Link className="primary-button button-link" href="/promises">فتح وحدة الوعود</Link>
+        </section>
+      ) : null}
+
       <section className="panel">
-        <h2>حالة الدفعة الأولى</h2>
+        <h2>حالة الوحدات التالية</h2>
         <p>
           تم تجهيز أساس الدخول والجلسات وصلاحيات مدير الفرع. الوحدات التالية
           ستظهر تدريجيًا بعد اكتمال كل دفعة واختبارها.

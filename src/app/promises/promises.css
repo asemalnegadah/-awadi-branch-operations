@@ -1,0 +1,68 @@
+.promises-shell { padding-top: 24px; }
+.promises-header, .promise-detail-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  padding: clamp(22px, 4vw, 36px); box-shadow: var(--shadow);
+}
+.promises-header h1, .promise-detail-header h1 { margin-bottom: 8px; font-size: clamp(1.8rem, 4vw, 3rem); }
+.promises-actions, .inline-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.button-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.promises-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.promise-currency-group { margin-top: 22px; }
+.promise-currency-group h2 { display: flex; gap: 8px; align-items: center; }
+.promise-filters, .promise-form, .promise-action-form {
+  display: grid; gap: 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); padding: 20px; box-shadow: var(--shadow);
+}
+.promise-filters { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 22px; }
+.promise-filters .filter-actions { display: flex; align-items: end; gap: 8px; }
+.promise-field { display: grid; gap: 7px; }
+.promise-field label { font-weight: 700; font-size: .92rem; }
+.promise-field input, .promise-field select, .promise-field textarea {
+  width: 100%; min-height: 44px; border: 1px solid #b9c2d0; border-radius: 10px;
+  background: #fff; padding: 9px 11px; color: var(--text);
+}
+.promise-field textarea { min-height: 92px; resize: vertical; }
+.promise-field input:focus, .promise-field select:focus, .promise-field textarea:focus {
+  outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(23,92,211,.12);
+}
+.promise-table-wrap { margin-top: 22px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); }
+.promise-table { width: 100%; border-collapse: collapse; min-width: 900px; }
+.promise-table th, .promise-table td { padding: 14px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: top; }
+.promise-table th { background: #f8fafc; color: var(--muted); font-size: .88rem; }
+.promise-table tr:last-child td { border-bottom: 0; }
+.promise-link { color: var(--primary); font-weight: 700; text-decoration: none; }
+.status-pill { display: inline-flex; border-radius: 999px; padding: 5px 10px; background: #eef4ff; color: #3538cd; font-size: .82rem; font-weight: 700; }
+.status-pill.overdue { background: var(--danger-soft); color: var(--danger); }
+.status-pill.due { background: #fffaeb; color: #b54708; }
+.status-pill.fulfilled { background: var(--success-soft); color: var(--success); }
+.promise-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+.promise-empty { margin-top: 22px; text-align: center; padding: 48px 20px; border: 1px dashed #b9c2d0; border-radius: var(--radius); background: #fff; color: var(--muted); }
+.promise-form-page { max-width: 860px; }
+.promise-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.promise-form .full-width { grid-column: 1 / -1; }
+.promise-form-message { grid-column: 1 / -1; margin: 0; }
+.promise-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.promise-detail-grid .card { min-height: 110px; }
+.promise-section { margin-top: 22px; }
+.promise-section-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.promise-timeline { display: grid; gap: 12px; padding: 0; list-style: none; }
+.promise-timeline li { border-right: 4px solid var(--primary); border-radius: 10px; background: #fff; padding: 14px 18px; box-shadow: var(--shadow); }
+.promise-timeline p { margin-bottom: 4px; }
+.promise-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.promise-action-form { box-shadow: none; }
+.promise-action-form h3 { margin: 0; }
+.promise-danger-button { min-height: 44px; border: 1px solid var(--danger); border-radius: 10px; background: var(--danger); padding: 9px 14px; color: #fff; font-weight: 700; }
+.promise-loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
+.promise-error { max-width: 720px; margin: 80px auto; }
+@media (max-width: 900px) {
+  .promise-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .promises-summary, .promise-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .promises-header, .promise-detail-header { flex-direction: column; }
+  .promise-filters, .promise-form, .promise-action-grid { grid-template-columns: 1fr; }
+  .promise-form .full-width { grid-column: auto; }
+  .promises-summary, .promise-detail-grid { grid-template-columns: 1fr; }
+  .promises-actions, .promises-actions > * { width: 100%; }
+}
