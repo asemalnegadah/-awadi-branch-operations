@@ -1,0 +1,548 @@
++      requestId,
++    );
++  }
++  if (["23503", "23514", "22P02"].includes(code ?? "")) {
++    return promiseJson(
++      {
++        success: false,
++        error: { code: "BUSINESS_RULE", message: "تعذر تنفيذ العملية بسبب قيد تشغيلي." },
++        requestId,
++      },
++      422,
++      requestId,
++    );
++  }
++
++  console.error("promises.api.failed", { requestId, ...safeErrorMetadata(error) });
++  return promiseJson(
++    {
++      success: false,
++      error: { code: "INTERNAL_ERROR", message: "تعذر إكمال العملية الآن." },
++      requestId,
++    },
++    500,
++    requestId,
++  );
++}
++
++export function promiseJson(body: unknown, status: number, requestId: string): NextResponse {
++  return NextResponse.json(body, {
++    status,
++    headers: {
++      "cache-control": "no-store",
++      "x-request-id": requestId,
++    },
++  });
++}
++
++function postgresCode(error: unknown): string | null {
++  if (!error || typeof error !== "object") return null;
++  const code = (error as { code?: unknown }).code;
++  return typeof code === "string" ? code : null;
++}
+diff --git a/src/lib/promises/errors.ts b/src/lib/promises/errors.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..232573b228fa87337b25a919619df8b709d60ca1
+--- /dev/null
++++ b/src/lib/promises/errors.ts
+@@ -0,0 +1,34 @@
++export class PromiseNotFoundError extends Error {
++  constructor() {
++    super("وعد السداد غير موجود أو غير متاح.");
++    this.name = "PromiseNotFoundError";
++  }
++}
++
++export class PromiseConflictError extends Error {
++  constructor(message = "تم تعديل وعد السداد من عملية أخرى. حدّث الصفحة وحاول مجددًا.") {
++    super(message);
++    this.name = "PromiseConflictError";
++  }
++}
++
++export class PromiseIdempotencyConflictError extends Error {
++  constructor() {
++    super("تم استخدام مفتاح منع التكرار نفسه لطلب مختلف.");
++    this.name = "PromiseIdempotencyConflictError";
++  }
++}
++
++export class PromiseBusinessRuleError extends Error {
++  constructor(message: string) {
++    super(message);
++    this.name = "PromiseBusinessRuleError";
++  }
++}
++
++export class PromiseInputError extends Error {
++  constructor(message: string) {
++    super(message);
++    this.name = "PromiseInputError";
++  }
++}
+diff --git a/src/lib/promises/postgres-repository.integration.test.ts b/src/lib/promises/postgres-repository.integration.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..24cb177b23b440f34b2e2a02ddc120d2b62f5e38
+--- /dev/null
++++ b/src/lib/promises/postgres-repository.integration.test.ts
+@@ -0,0 +1,677 @@
++import { randomUUID } from "node:crypto";
++
++import postgres, { type Sql } from "postgres";
++import { afterAll, beforeAll, describe, expect, it } from "vitest";
++
++import { closeDatabaseClient, getDatabaseClient } from "@/lib/db/client";
++import type { AuthenticatedUser, RequestSecurityContext } from "@/lib/auth/types";
++
++import {
++  PromiseBusinessRuleError,
++  PromiseConflictError,
++  PromiseIdempotencyConflictError,
++} from "./errors";
++import {
++  addFollowUpPostgres,
++  allocateConfirmedCollectionPostgres,
++  createPromisePostgres,
++  getCustomerPromiseSummaryPostgres,
++  getPromiseDetailsPostgres,
++  getPromiseHistoryPostgres,
++  getSalespersonPromiseSummaryPostgres,
++  listPromisesPostgres,
++  reverseCollectionAllocationPostgres,
++  updatePromisePostgres,
++} from "./postgres-repository";
++import type { CreatePromiseInput, PromiseCommandContext } from "./types";
++
++const sql = getDatabaseClient();
++const actorId = randomUUID();
++const reviewerId = randomUUID();
++const approverId = randomUUID();
++const representativeId = randomUUID();
++const customerId = randomUUID();
++const srAccountId = randomUUID();
++const rgAccountId = randomUUID();
++const runKey = randomUUID();
++
++const actor: AuthenticatedUser = {
++  id: actorId,
++  email: `promise.actor.${runKey}@example.test`,
++  fullName: "مدير اختبار وعود السداد",
++  roles: ["BRANCH_MANAGER"],
++  permissions: new Set([
++    "promises.read",
++    "promises.create",
++    "promises.update",
++    "promises.follow_up",
++    "promises.reject",
++    "promises.cancel",
++    "promises.allocate_collection",
++    "promises.reverse_allocation",
++    "promises.escalate",
++    "promises.view_history",
++  ]),
++  operatingMode: "SINGLE_MANAGER",
++  mustChangePassword: false,
++};
++
++function context(key: string): PromiseCommandContext {
++  const request: RequestSecurityContext = {
++    requestId: randomUUID(),
++    ipAddress: "127.0.0.1",
++    userAgent: "vitest-postgres",
++  };
++  return { actor, request, idempotencyKey: `${runKey}-${key}` };
++}
++
++function promiseInput(
++  overrides: Partial<CreatePromiseInput> = {},
++): CreatePromiseInput {
++  return {
++    customerId,
++    customerAccountId: srAccountId,
++    representativeId,
++    currencyCode: "SR",
++    promisedAmountMinor: 10_000,
++    promiseDate: "2026-07-18",
++    dueDate: "2026-07-20",
++    debtReason: "رصيد فاتورة آجلة",
++    ...overrides,
++  };
++}
++
++async function createConfirmedCollection(
++  db: Sql,
++  options: {
++    readonly amountMinor: number;
++    readonly currency?: "SR" | "RG";
++    readonly confirmed?: boolean;
++  },
++): Promise<string> {
++  const collectionId = randomUUID();
++  const currency = options.currency ?? "SR";
++  const accountId = currency === "SR" ? srAccountId : rgAccountId;
++  const idKey = `${runKey}-collection-${collectionId}`;
++  await db`
++    INSERT INTO collections (
++      id,
++      customer_id,
++      customer_account_id,
++      representative_id,
++      currency_code,
++      amount_minor,
++      payment_method,
++      collected_at,
++      receipt_number,
++      state,
++      created_by,
++      updated_by,
++      idempotency_key
++    ) VALUES (
++      ${collectionId},
++      ${customerId},
++      ${accountId},
++      ${representativeId},
++      ${currency},
++      ${options.amountMinor},
++      'CASH',
++      now(),
++      ${`RCPT-${collectionId}`},
++      'DRAFT',
++      ${actorId},
++      ${actorId},
++      ${idKey}
++    )
++  `;
++  if (options.confirmed === false) return collectionId;
++
++  await db.begin(async (transaction) => {
++    await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++    await transaction`
++      UPDATE collections
++      SET state = 'SUBMITTED', updated_by = ${actorId}
++      WHERE id = ${collectionId}
++    `;
++  });
++  await db.begin(async (transaction) => {
++    await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++    await transaction`
++      UPDATE collections
++      SET state = 'REVIEWED',
++          reviewed_at = now(),
++          reviewed_by = ${reviewerId},
++          updated_by = ${reviewerId}
++      WHERE id = ${collectionId}
++    `;
++  });
++  await db.begin(async (transaction) => {
++    await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++    await transaction`
++      UPDATE collections
++      SET state = 'APPROVED',
++          approved_at = now(),
++          approved_by = ${approverId},
++          updated_by = ${approverId}
++      WHERE id = ${collectionId}
++    `;
++  });
++  await db.begin(async (transaction) => {
++    await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++    await transaction`
++      UPDATE collections
++      SET state = 'CASH_RECEIVED',
++          cash_received_at = now(),
++          cash_received_by = ${reviewerId},
++          updated_by = ${reviewerId}
++      WHERE id = ${collectionId}
++    `;
++  });
++
++  const ledgerRows = await db<{ id: string }[]>`
++    INSERT INTO customer_ledger_entries (
++      customer_id,
++      customer_account_id,
++      currency_code,
++      direction,
++      entry_type,
++      amount_minor,
++      accounting_date,
++      source_type,
++      source_id,
++      idempotency_key,
++      posted_at,
++      posted_by,
++      request_id
++    ) VALUES (
++      ${customerId},
++      ${accountId},
++      ${currency},
++      'CREDIT',
++      'COLLECTION',
++      ${options.amountMinor},
++      current_date,
++      'COLLECTION',
++      ${collectionId},
++      ${`${idKey}-ledger`},
++      now(),
++      ${reviewerId},
++      ${randomUUID()}
++    )
++    RETURNING id
++  `;
++  const ledgerId = ledgerRows[0]?.id;
++  if (!ledgerId) throw new Error("failed to create integration ledger entry");
++
++  await db.begin(async (transaction) => {
++    await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++    await transaction`
++      UPDATE collections
++      SET state = 'RECONCILED',
++          ledger_entry_id = ${ledgerId},
++          reconciled_at = now(),
++          reconciled_by = ${reviewerId},
++          updated_by = ${reviewerId}
++      WHERE id = ${collectionId}
++    `;
++  });
++  return collectionId;
++}
++
++beforeAll(async () => {
++  await sql`
++    INSERT INTO users (id, email, full_name, status)
++    VALUES
++      (${actorId}, ${actor.email}, ${actor.fullName}, 'ACTIVE'),
++      (${reviewerId}, ${`promise.reviewer.${runKey}@example.test`}, 'مراجع وعود', 'ACTIVE'),
++      (${approverId}, ${`promise.approver.${runKey}@example.test`}, 'معتمد وعود', 'ACTIVE')
++  `;
++  await sql`
++    INSERT INTO sales_representatives (
++      id, full_name_ar, user_id, representative_type, status
++    ) VALUES (
++      ${representativeId}, 'مندوب وعود التكامل', ${actorId}, 'RETAIL', 'ACTIVE'
++    )
++  `;
++  await sql`
++    INSERT INTO customers (
++      id, customer_number, trade_name_ar, created_by, updated_by
++    ) VALUES (
++      ${customerId}, ${`PROMISE-${runKey}`}, 'عميل وعود التكامل', ${actorId}, ${actorId}
++    )
++  `;
++  await sql`
++    INSERT INTO customer_accounts (id, customer_id, currency_code, created_by)
++    VALUES
++      (${srAccountId}, ${customerId}, 'SR', ${actorId}),
++      (${rgAccountId}, ${customerId}, 'RG', ${actorId})
++  `;
++});
++
++afterAll(async () => {
++  await closeDatabaseClient();
++});
++
++describe.sequential("PostgreSQL payment promises repository", () => {
++  it("ينشئ وعدًا صحيحًا ويسجل CREATED ويدعم idempotency", async () => {
++    const key = "create-idempotent";
++    const first = await createPromisePostgres(sql, promiseInput(), context(key));
++    expect(first.replayed).toBe(false);
++    expect(first.promise).toMatchObject({
++      currencyCode: "SR",
++      promisedAmountMinor: 10_000,
++      fulfilledAmountMinor: 0,
++      remainingAmountMinor: 10_000,
++    });
++
++    const replay = await createPromisePostgres(sql, promiseInput(), context(key));
++    expect(replay.replayed).toBe(true);
++    expect(replay.promise.id).toBe(first.promise.id);
++    await expect(
++      createPromisePostgres(
++        sql,
++        promiseInput({ promisedAmountMinor: 11_000 }),
++        context(key),
++      ),
++    ).rejects.toBeInstanceOf(PromiseIdempotencyConflictError);
++
++    const events = await getPromiseHistoryPostgres(sql, first.promise.id);
++    expect(events.map((event) => event.eventType)).toContain("CREATED");
++  });
++
++  it("تفرض قاعدة البيانات العملات والمبالغ المحسوبة", async () => {
++    await expect(
++      sql`
++        INSERT INTO payment_promises (
++          customer_id, customer_account_id, representative_id, currency_code,
++          promised_amount_minor, promise_date, due_date, debt_reason,
++          created_by, updated_by, idempotency_key
++        ) VALUES (
++          ${customerId}, ${srAccountId}, ${representativeId}, 'USD',
++          100, current_date, current_date, 'عملة مرفوضة',
++          ${actorId}, ${actorId}, ${`${runKey}-invalid-currency`}
++        )
++      `,
++    ).rejects.toBeDefined();
++    await expect(
++      sql`
++        INSERT INTO payment_promises (
++          customer_id, customer_account_id, representative_id, currency_code,
++          promised_amount_minor, promise_date, due_date, debt_reason,
++          created_by, updated_by, idempotency_key
++        ) VALUES (
++          ${customerId}, ${srAccountId}, ${representativeId}, 'SR',
++          -1, current_date, current_date, 'مبلغ مرفوض',
++          ${actorId}, ${actorId}, ${`${runKey}-negative`}
++        )
++      `,
++    ).rejects.toBeDefined();
++
++    const created = await createPromisePostgres(sql, promiseInput(), context("manual-fulfilled"));
++    await expect(
++      sql`
++        UPDATE payment_promises
++        SET fulfilled_amount_minor = 1, updated_by = ${actorId}
++        WHERE id = ${created.promise.id}
++      `,
++    ).rejects.toBeDefined();
++  });
++
++  it("ينشئ متابعة دون فقدها ويحدّث next_follow_up_at ويسجل الحدث", async () => {
++    const created = await createPromisePostgres(sql, promiseInput(), context("followup-promise"));
++    const followUp = await addFollowUpPostgres(
++      sql,
++      created.promise.id,
++      {
++        scheduledAt: "2026-07-22T09:00:00+03:00",
++        notes: "اتصال هاتفي",
++      },
++      context("followup-create"),
++    );
++    expect(followUp.replayed).toBe(false);
++    expect(followUp.promise.nextFollowUpAt).toBe("2026-07-22T06:00:00.000Z");
++    const details = await getPromiseDetailsPostgres(sql, created.promise.id);
++    expect(details?.followUps).toHaveLength(1);
++    expect(details?.events.map((event) => event.eventType)).toContain("FOLLOW_UP_ADDED");
++  });
++
++  it("ينفذ تخصيصًا جزئيًا وعدة تخصيصات ويمنع التجاوز والعملة والتحصيل غير المؤكد", async () => {
++    const promise = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 10_000 }),
++      context("allocation-promise"),
++    );
++    const collectionOne = await createConfirmedCollection(sql, { amountMinor: 4_000 });
++    const collectionTwo = await createConfirmedCollection(sql, { amountMinor: 8_000 });
++    const unconfirmed = await createConfirmedCollection(sql, {
++      amountMinor: 1_000,
++      confirmed: false,
++    });
++    const rgCollection = await createConfirmedCollection(sql, {
++      amountMinor: 1_000,
++      currency: "RG",
++    });
++
++    const first = await allocateConfirmedCollectionPostgres(
++      sql,
++      promise.promise.id,
++      { collectionId: collectionOne, amountMinor: 4_000 },
++      context("allocation-first"),
++    );
++    expect(first.promise).toMatchObject({
++      baseStatus: "PARTIALLY_FULFILLED",
++      fulfilledAmountMinor: 4_000,
++      remainingAmountMinor: 6_000,
++    });
++    const replay = await allocateConfirmedCollectionPostgres(
++      sql,
++      promise.promise.id,
++      { collectionId: collectionOne, amountMinor: 4_000 },
++      context("allocation-first"),
++    );
++    expect(replay.replayed).toBe(true);
++
++    const second = await allocateConfirmedCollectionPostgres(
++      sql,
++      promise.promise.id,
++      { collectionId: collectionTwo, amountMinor: 6_000 },
++      context("allocation-second"),
++    );
++    expect(second.promise).toMatchObject({
++      baseStatus: "FULFILLED",
++      fulfilledAmountMinor: 10_000,
++      remainingAmountMinor: 0,
++    });
++
++    const overPromise = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 1_000 }),
++      context("over-promise"),
++    );
++    await expect(
++      allocateConfirmedCollectionPostgres(
++        sql,
++        overPromise.promise.id,
++        { collectionId: collectionTwo, amountMinor: 1_001 },
++        context("over-promise-allocation"),
++      ),
++    ).rejects.toBeInstanceOf(PromiseBusinessRuleError);
++    await expect(
++      allocateConfirmedCollectionPostgres(
++        sql,
++        overPromise.promise.id,
++        { collectionId: unconfirmed, amountMinor: 500 },
++        context("unconfirmed-allocation"),
++      ),
++    ).rejects.toBeInstanceOf(PromiseBusinessRuleError);
++    await expect(
++      allocateConfirmedCollectionPostgres(
++        sql,
++        overPromise.promise.id,
++        { collectionId: rgCollection, amountMinor: 500 },
++        context("currency-mismatch-allocation"),
++      ),
++    ).rejects.toBeInstanceOf(PromiseBusinessRuleError);
++  });
++
++  it("يعكس التخصيص ويعيد فتح الوعد ويسجل COLLECTION_REVERSED وREOPENED", async () => {
++    const promise = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 5_000 }),
++      context("reversal-promise"),
++    );
++    const collection = await createConfirmedCollection(sql, { amountMinor: 5_000 });
++    const allocation = await allocateConfirmedCollectionPostgres(
++      sql,
++      promise.promise.id,
++      { collectionId: collection, amountMinor: 5_000 },
++      context("reversal-allocation"),
++    );
++    expect(allocation.promise.baseStatus).toBe("FULFILLED");
++
++    const reversed = await reverseCollectionAllocationPostgres(
++      sql,
++      promise.promise.id,
++      allocation.allocation.id,
++      { reason: "عكس سند التحصيل" },
++      context("reversal-operation"),
++    );
++    expect(reversed.promise.fulfilledAmountMinor).toBe(0);
++    expect(["NEW", "UPCOMING"]).toContain(reversed.promise.baseStatus);
++    const replay = await reverseCollectionAllocationPostgres(
++      sql,
++      promise.promise.id,
++      allocation.allocation.id,
++      { reason: "عكس سند التحصيل" },
++      context("reversal-operation"),
++    );
++    expect(replay.replayed).toBe(true);
++    const events = await getPromiseHistoryPostgres(sql, promise.promise.id);
++    expect(events.map((event) => event.eventType)).toEqual(
++      expect.arrayContaining(["COLLECTION_REVERSED", "REOPENED"]),
++    );
++  });
++
++  it("يمنع Lost Updates باستخدام version", async () => {
++    const promise = await createPromisePostgres(sql, promiseInput(), context("version-promise"));
++    const version = promise.promise.version;
++    const first = updatePromisePostgres(
++      sql,
++      promise.promise.id,
