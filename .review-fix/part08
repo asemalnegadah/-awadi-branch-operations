@@ -1,0 +1,142 @@
++    const allocation = await allocateConfirmedCollectionPostgres(
++      sql,
++      promise.promise.id,
++      { collectionId, amountMinor: 3_000 },
++      context("collection-reversal-guard-allocation"),
++    );
++
++    await expect(
++      sql.begin(async (transaction) => {
++        await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++        await transaction`
++          UPDATE collections
++          SET state = 'REVERSED',
++              reversed_at = now(),
++              reversed_by = ${reviewerId},
++              reversal_reason = 'محاولة عكس قبل فك الوعد',
++              updated_by = ${reviewerId}
++          WHERE id = ${collectionId}
++        `;
++      }),
++    ).rejects.toThrow(/reverse active payment promise allocations/);
++
++    await reverseCollectionAllocationPostgres(
++      sql,
++      promise.promise.id,
++      allocation.allocation.id,
++      { reason: "فك الربط قبل عكس التحصيل" },
++      context("collection-reversal-guard-release"),
++    );
++    await sql.begin(async (transaction) => {
++      await transaction`SELECT set_config('app.request_id', ${randomUUID()}, true)`;
++      await transaction`
++        UPDATE collections
++        SET state = 'REVERSED',
++            reversed_at = now(),
++            reversed_by = ${reviewerId},
++            reversal_reason = 'عكس بعد فك تخصيص الوعد',
++            updated_by = ${reviewerId}
++        WHERE id = ${collectionId}
++      `;
++    });
++    const rows = await sql<{ state: string }[]>`
++      SELECT state FROM collections WHERE id = ${collectionId}
++    `;
++    expect(rows[0]?.state).toBe("REVERSED");
++  });
++
++  it("يقيد قراءة وكتابة المندوب على وعوده فقط", async () => {
++    const own = await createPromisePostgres(
++      sql,
++      promiseInput(),
++      context("representative-scope-own"),
++      representativeId,
++    );
++    const other = await createPromisePostgres(
++      sql,
++      {
++        customerId: secondCustomerId,
++        customerAccountId: secondAccountId,
++        representativeId: secondRepresentativeId,
++        currencyCode: "SR",
++        promisedAmountMinor: 1_000,
++        promiseDate: "2026-07-18",
++        dueDate: "2026-07-20",
++        debtReason: "وعد مندوب آخر",
++      },
++      context("representative-scope-other"),
++    );
++
++    const page = await listPromisesPostgres(
++      sql,
++      { limit: 100 },
++      representativeId,
++    );
++    expect(page.items.some((item) => item.id === own.promise.id)).toBe(true);
++    expect(page.items.some((item) => item.id === other.promise.id)).toBe(false);
++    await expect(
++      updatePromisePostgres(
++        sql,
++        other.promise.id,
++        { version: other.promise.version, notes: "محاولة غير مصرح بها" },
++        context("representative-scope-forbidden-update"),
++        representativeId,
++      ),
++    ).rejects.toBeInstanceOf(PromiseNotFoundError);
++  });
++
+   it("يتراجع بالكامل إذا فشل تسجيل الحدث داخل Transaction", async () => {
+     const promise = await createPromisePostgres(
+       sql,
+diff --git a/db/tests/0018_payment_promises_review_hardening_smoke.sql b/db/tests/0018_payment_promises_review_hardening_smoke.sql
+new file mode 100644
+--- /dev/null
++++ b/db/tests/0018_payment_promises_review_hardening_smoke.sql
+@@ -0,0 +1,47 @@
++BEGIN;
++
++DO $$
++DECLARE
++  system_admin_grants integer;
++  has_create_payload boolean;
++  guard_trigger_count integer;
++BEGIN
++  SELECT COUNT(*)
++  INTO system_admin_grants
++  FROM role_permissions AS role_permission
++  JOIN roles AS role ON role.id = role_permission.role_id
++  JOIN permissions AS permission ON permission.id = role_permission.permission_id
++  WHERE role.code = 'SYSTEM_ADMIN'
++    AND permission.code IN ('promises.read', 'promises.view_history');
++
++  IF system_admin_grants <> 0 THEN
++    RAISE EXCEPTION 'SYSTEM_ADMIN must not receive promise business access by default';
++  END IF;
++
++  SELECT EXISTS (
++    SELECT 1
++    FROM information_schema.columns
++    WHERE table_schema = 'public'
++      AND table_name = 'payment_promises'
++      AND column_name = 'create_payload'
++      AND data_type = 'jsonb'
++  ) INTO has_create_payload;
++
++  IF NOT has_create_payload THEN
++    RAISE EXCEPTION 'payment_promises.create_payload is missing';
++  END IF;
++
++  SELECT COUNT(*)
++  INTO guard_trigger_count
++  FROM pg_trigger
++  WHERE tgrelid = 'collections'::regclass
++    AND tgname = 'a_collections_guard_promise_allocations_before_reversal'
++    AND NOT tgisinternal;
++
++  IF guard_trigger_count <> 1 THEN
++    RAISE EXCEPTION 'collection promise-allocation reversal guard is missing';
++  END IF;
++END;
++$$;
++
++ROLLBACK;
