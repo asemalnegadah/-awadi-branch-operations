@@ -1,0 +1,536 @@
++        $1, 'USER', $2, 'PAYMENT_PROMISE', $3, $4, $5,
++        $6::inet, $7, $8, $9::jsonb, $10::jsonb, 'SUCCESS',
++        jsonb_build_object('operating_mode', 'SINGLE_BRANCH_ADEN')
++      )
++    `,
++    [
++      context.actor.id,
++      action,
++      resourceId,
++      context.request.requestId,
++      context.sessionId ?? null,
++      context.request.ipAddress,
++      context.request.userAgent,
++      reason ?? null,
++      previousValues ? JSON.stringify(previousValues) : null,
++      newValues ? JSON.stringify(newValues) : null,
++    ],
++  );
++}
++
++async function insertStatusEventIfChanged(
++  transaction: Sql,
++  oldStatus: PromiseBaseStatus,
++  promise: PaymentPromise,
++  context: PromiseCommandContext,
++  oldValues: Readonly<Record<string, unknown>>,
++  newValues: Readonly<Record<string, unknown>>,
++): Promise<void> {
++  if (oldStatus === promise.baseStatus) return;
++  let eventType: PromiseEventType | null = null;
++  if (promise.baseStatus === "PARTIALLY_FULFILLED") eventType = "PARTIALLY_FULFILLED";
++  if (promise.baseStatus === "FULFILLED") eventType = "FULFILLED";
++  if (
++    (oldStatus === "FULFILLED" || oldStatus === "PARTIALLY_FULFILLED") &&
++    promise.baseStatus !== "FULFILLED"
++  ) {
++    eventType = "REOPENED";
++  }
++  if (!eventType) return;
++  await insertEvent(transaction, {
++    promiseId: promise.id,
++    context,
++    eventType,
++    oldValues,
++    newValues,
++    operationPayload: {},
++    reason: null,
++    sourceEntity: null,
++    sourceId: null,
++    idempotencyKey: null,
++  });
++}
++
++function specializedEvent(
++  promiseId: string,
++  context: PromiseCommandContext,
++  eventType: PromiseEventType,
++  oldValues: Readonly<Record<string, unknown>>,
++  newValues: Readonly<Record<string, unknown>>,
++): Parameters<typeof insertEvent>[1] {
++  return {
++    promiseId,
++    context,
++    eventType,
++    oldValues,
++    newValues,
++    operationPayload: {},
++    reason: null,
++    sourceEntity: null,
++    sourceId: null,
++    idempotencyKey: null,
++  };
++}
++
++async function selectPromises(
++  sql: Sql,
++  suffix: string,
++  parameters: readonly SqlParameter[],
++): Promise<PromiseRow[]> {
++  return sql.unsafe<PromiseRow[]>(
++    `SELECT ${promiseSelect} ${promiseJoins} ${suffix}`,
++    [...parameters],
++  );
++}
++
++async function requirePromiseById(sql: Sql, promiseId: string): Promise<PaymentPromise> {
++  const promise = await getPromisePostgres(sql, promiseId);
++  if (!promise) throw new PromiseNotFoundError();
++  return promise;
++}
++
++async function lockPromise(transaction: Sql, promiseId: string): Promise<PromiseLockRow> {
++  const rows = await transaction.unsafe<PromiseLockRow[]>(
++    `
++      SELECT
++        id,
++        customer_id,
++        customer_account_id,
++        representative_id,
++        currency_code,
++        promised_amount_minor,
++        fulfilled_amount_minor,
++        promise_date,
++        due_date,
++        next_follow_up_at,
++        debt_reason,
++        delay_reason,
++        notes,
++        base_status,
++        escalation_level,
++        version
++      FROM payment_promises
++      WHERE id = $1::uuid
++      FOR UPDATE
++    `,
++    [promiseId],
++  );
++  if (!rows[0]) throw new PromiseNotFoundError();
++  return rows[0];
++}
++
++async function locklessPromise(sql: Sql, promiseId: string): Promise<PromiseLockRow | null> {
++  const rows = await sql.unsafe<PromiseLockRow[]>(
++    `
++      SELECT
++        id,
++        customer_id,
++        customer_account_id,
++        representative_id,
++        currency_code,
++        promised_amount_minor,
++        fulfilled_amount_minor,
++        promise_date,
++        due_date,
++        next_follow_up_at,
++        debt_reason,
++        delay_reason,
++        notes,
++        base_status,
++        escalation_level,
++        version
++      FROM payment_promises
++      WHERE id = $1::uuid
++    `,
++    [promiseId],
++  );
++  return rows[0] ?? null;
++}
++
++async function lockCollection(transaction: Sql, collectionId: string): Promise<CollectionLockRow> {
++  const rows = await transaction.unsafe<CollectionLockRow[]>(
++    `
++      SELECT
++        id,
++        customer_id,
++        customer_account_id,
++        currency_code,
++        amount_minor,
++        receipt_number,
++        collected_at,
++        state,
++        ledger_entry_id,
++        reversed_at
++      FROM collections
++      WHERE id = $1::uuid
++      FOR UPDATE
++    `,
++    [collectionId],
++  );
++  if (!rows[0]) throw new PromiseBusinessRuleError("التحصيل غير موجود أو غير متاح.");
++  return rows[0];
++}
++
++function validateCollectionForPromise(
++  promise: PromiseLockRow,
++  collection: CollectionLockRow,
++): void {
++  if (
++    collection.state !== "RECONCILED" &&
++    collection.state !== "CLOSED"
++  ) {
++    throw new PromiseBusinessRuleError("لا يمكن ربط وعد إلا بتحصيل مؤكد ماليًا.");
++  }
++  if (!collection.ledger_entry_id || collection.reversed_at) {
++    throw new PromiseBusinessRuleError("التحصيل غير مؤكد أو تم عكسه.");
++  }
++  if (
++    collection.customer_id !== promise.customer_id ||
++    collection.customer_account_id !== promise.customer_account_id
++  ) {
++    throw new PromiseBusinessRuleError("التحصيل لا يخص العميل وحساب العملة المحددين في الوعد.");
++  }
++  if (collection.currency_code !== promise.currency_code) {
++    throw new PromiseBusinessRuleError("عملة التحصيل لا تطابق عملة الوعد.");
++  }
++}
++
++const followUpSelect = `
++  SELECT
++    followup.id,
++    followup.promise_id,
++    followup.scheduled_at,
++    followup.completed_at,
++    followup.outcome,
++    followup.notes,
++    followup.created_by,
++    creator.full_name AS created_by_name,
++    followup.created_at,
++    followup.request_id,
++    followup.idempotency_key
++  FROM payment_promise_followups AS followup
++  JOIN users AS creator ON creator.id = followup.created_by
++`;
++
++async function listPromiseFollowUpsPostgres(
++  sql: Sql,
++  promiseId: string,
++): Promise<readonly PaymentPromiseFollowUp[]> {
++  const rows = await sql.unsafe<FollowUpRow[]>(
++    `${followUpSelect}
++     WHERE followup.promise_id = $1::uuid
++     ORDER BY followup.scheduled_at ASC, followup.id ASC`,
++    [promiseId],
++  );
++  return Object.freeze(rows.map(mapFollowUpRow));
++}
++
++const allocationSelect = `
++  SELECT
++    allocation.id,
++    allocation.promise_id,
++    allocation.collection_id,
++    allocation.currency_code,
++    allocation.amount_minor,
++    allocation.allocated_at,
++    allocation.allocated_by,
++    allocator.full_name AS allocated_by_name,
++    allocation.request_id,
++    allocation.idempotency_key,
++    allocation.reversed_at,
++    allocation.reversed_by,
++    allocation.reversal_reason,
++    allocation.reversal_request_id,
++    allocation.reversal_idempotency_key
++  FROM payment_promise_allocations AS allocation
++  JOIN users AS allocator ON allocator.id = allocation.allocated_by
++`;
++
++async function listPromiseAllocationsPostgres(
++  sql: Sql,
++  promiseId: string,
++): Promise<readonly PaymentPromiseAllocation[]> {
++  const rows = await sql.unsafe<AllocationRow[]>(
++    `${allocationSelect}
++     WHERE allocation.promise_id = $1::uuid
++     ORDER BY allocation.allocated_at ASC, allocation.id ASC`,
++    [promiseId],
++  );
++  return Object.freeze(rows.map(mapAllocationRow));
++}
++
++async function summaryRows(
++  sql: Sql,
++  condition: string,
++  parameters: readonly SqlParameter[],
++): Promise<SummaryRow[]> {
++  return sql.unsafe<SummaryRow[]>(
++    `
++      SELECT
++        promise.currency_code,
++        COUNT(*)::integer AS promise_count,
++        COALESCE(SUM(promise.promised_amount_minor), 0) AS promised_amount_minor,
++        COALESCE(SUM(promise.fulfilled_amount_minor), 0) AS fulfilled_amount_minor,
++        COALESCE(SUM(promise.remaining_amount_minor), 0) AS remaining_amount_minor,
++        COUNT(*) FILTER (
++          WHERE promise.base_status IN ('NEW', 'UPCOMING', 'PARTIALLY_FULFILLED')
++            AND promise.due_date = ${adenTodaySql}
++        )::integer AS due_today_count,
++        COUNT(*) FILTER (
++          WHERE promise.base_status IN ('NEW', 'UPCOMING', 'PARTIALLY_FULFILLED')
++            AND promise.due_date < ${adenTodaySql}
++        )::integer AS overdue_count,
++        COUNT(*) FILTER (WHERE promise.base_status = 'PARTIALLY_FULFILLED')::integer
++          AS partially_fulfilled_count,
++        COUNT(*) FILTER (WHERE promise.base_status = 'FULFILLED')::integer
++          AS fulfilled_count
++      FROM payment_promises AS promise
++      WHERE ${condition}
++      GROUP BY promise.currency_code
++      ORDER BY promise.currency_code
++    `,
++    [...parameters],
++  );
++}
++
++function mapPromiseRow(row: PromiseRow): PaymentPromise {
++  return Object.freeze({
++    id: row.id,
++    customerId: row.customer_id,
++    customerAccountId: row.customer_account_id,
++    customerName: row.customer_name,
++    customerNumber: row.customer_number,
++    representativeId: row.representative_id,
++    representativeName: row.representative_name,
++    currencyCode: row.currency_code,
++    promisedAmountMinor: safeInteger(row.promised_amount_minor, "promised amount"),
++    fulfilledAmountMinor: safeInteger(row.fulfilled_amount_minor, "fulfilled amount"),
++    remainingAmountMinor: safeInteger(row.remaining_amount_minor, "remaining amount"),
++    promiseDate: toDateString(row.promise_date),
++    dueDate: toDateString(row.due_date),
++    nextFollowUpAt: toOptionalIsoString(row.next_follow_up_at),
++    debtReason: row.debt_reason,
++    delayReason: row.delay_reason,
++    notes: row.notes,
++    baseStatus: row.base_status,
++    temporalStatus: row.temporal_status,
++    escalationLevel: safeInteger(row.escalation_level, "escalation level"),
++    rejectedAt: toOptionalIsoString(row.rejected_at),
++    rejectedBy: row.rejected_by,
++    rejectionReason: row.rejection_reason,
++    cancelledAt: toOptionalIsoString(row.cancelled_at),
++    cancelledBy: row.cancelled_by,
++    cancellationReason: row.cancellation_reason,
++    createdBy: row.created_by,
++    createdAt: toIsoString(row.created_at),
++    updatedBy: row.updated_by,
++    updatedAt: toIsoString(row.updated_at),
++    version: safeInteger(row.version, "version"),
++  });
++}
++
++function mapEventRow(row: EventRow): PaymentPromiseEvent {
++  return Object.freeze({
++    id: row.id,
++    promiseId: row.promise_id,
++    actorUserId: row.actor_user_id,
++    actorName: row.actor_name,
++    occurredAt: toIsoString(row.occurred_at),
++    requestId: row.request_id,
++    eventType: row.event_type,
++    oldValues: Object.freeze(asRecord(row.old_values)),
++    newValues: Object.freeze(asRecord(row.new_values)),
++    reason: row.reason,
++    sourceEntity: row.source_entity,
++    sourceId: row.source_id,
++  });
++}
++
++function mapFollowUpRow(row: FollowUpRow): PaymentPromiseFollowUp {
++  return Object.freeze({
++    id: row.id,
++    promiseId: row.promise_id,
++    scheduledAt: toIsoString(row.scheduled_at),
++    completedAt: toOptionalIsoString(row.completed_at),
++    outcome: row.outcome,
++    notes: row.notes,
++    createdBy: row.created_by,
++    createdByName: row.created_by_name,
++    createdAt: toIsoString(row.created_at),
++  });
++}
++
++function mapAllocationRow(row: AllocationRow): PaymentPromiseAllocation {
++  return Object.freeze({
++    id: row.id,
++    promiseId: row.promise_id,
++    collectionId: row.collection_id,
++    currencyCode: row.currency_code,
++    amountMinor: safeInteger(row.amount_minor, "allocation amount"),
++    allocatedAt: toIsoString(row.allocated_at),
++    allocatedBy: row.allocated_by,
++    allocatedByName: row.allocated_by_name,
++    reversedAt: toOptionalIsoString(row.reversed_at),
++    reversedBy: row.reversed_by,
++    reversalReason: row.reversal_reason,
++  });
++}
++
++function mapSummaryRow(row: SummaryRow): CurrencyPromiseSummary {
++  return Object.freeze({
++    currencyCode: row.currency_code,
++    promiseCount: safeInteger(row.promise_count, "promise count"),
++    promisedAmountMinor: safeInteger(row.promised_amount_minor, "promised summary"),
++    fulfilledAmountMinor: safeInteger(row.fulfilled_amount_minor, "fulfilled summary"),
++    remainingAmountMinor: safeInteger(row.remaining_amount_minor, "remaining summary"),
++    dueTodayCount: safeInteger(row.due_today_count, "due today count"),
++    overdueCount: safeInteger(row.overdue_count, "overdue count"),
++    partiallyFulfilledCount: safeInteger(row.partially_fulfilled_count, "partial count"),
++    fulfilledCount: safeInteger(row.fulfilled_count, "fulfilled count"),
++  });
++}
++
++function sameCreateInput(row: PromiseLockRow, input: CreatePromiseInput): boolean {
++  return (
++    row.customer_id === input.customerId &&
++    row.customer_account_id === input.customerAccountId &&
++    row.representative_id === input.representativeId &&
++    row.currency_code === input.currencyCode &&
++    safeInteger(row.promised_amount_minor, "promised amount") === input.promisedAmountMinor &&
++    toDateString(row.promise_date) === input.promiseDate &&
++    toDateString(row.due_date) === input.dueDate &&
++    toOptionalIsoString(row.next_follow_up_at) === (input.nextFollowUpAt ?? null) &&
++    row.debt_reason === input.debtReason &&
++    row.delay_reason === (input.delayReason ?? null) &&
++    row.notes === (input.notes ?? null)
++  );
++}
++
++function sameFollowUpInput(
++  row: FollowUpRow,
++  promiseId: string,
++  input: AddFollowUpInput,
++): boolean {
++  return (
++    row.promise_id === promiseId &&
++    toIsoString(row.scheduled_at) === toIsoString(input.scheduledAt) &&
++    toOptionalIsoString(row.completed_at) === (input.completedAt ? toIsoString(input.completedAt) : null) &&
++    row.outcome === (input.outcome ?? null) &&
++    row.notes === (input.notes ?? null)
++  );
++}
++
++function sameAllocationInput(
++  row: AllocationRow,
++  promiseId: string,
++  input: AllocateCollectionInput,
++): boolean {
++  return (
++    row.promise_id === promiseId &&
++    row.collection_id === input.collectionId &&
++    safeInteger(row.amount_minor, "allocation amount") === input.amountMinor
++  );
++}
++
++function assertVersion(row: PromiseLockRow, expected: number): void {
++  if (safeInteger(row.version, "version") !== expected) throw new PromiseConflictError();
++}
++
++function assertOpenPromise(row: PromiseLockRow): void {
++  if (!openStatuses.includes(row.base_status)) {
++    throw new PromiseBusinessRuleError("حالة الوعد الحالية لا تسمح بهذه العملية.");
++  }
++}
++
++function calculateStatus(
++  fulfilledAmount: number,
++  promisedAmount: number,
++  dueDate: string,
++): PromiseBaseStatus {
++  if (fulfilledAmount === promisedAmount) return "FULFILLED";
++  if (fulfilledAmount > 0) return "PARTIALLY_FULFILLED";
++  return dueDate > adenDateString(new Date()) ? "UPCOMING" : "NEW";
++}
++
++function promiseSnapshot(promise: PaymentPromise): Readonly<Record<string, unknown>> {
++  return Object.freeze({
++    id: promise.id,
++    customerId: promise.customerId,
++    customerAccountId: promise.customerAccountId,
++    representativeId: promise.representativeId,
++    currencyCode: promise.currencyCode,
++    promisedAmountMinor: promise.promisedAmountMinor,
++    fulfilledAmountMinor: promise.fulfilledAmountMinor,
++    remainingAmountMinor: promise.remainingAmountMinor,
++    promiseDate: promise.promiseDate,
++    dueDate: promise.dueDate,
++    nextFollowUpAt: promise.nextFollowUpAt,
++    debtReason: promise.debtReason,
++    delayReason: promise.delayReason,
++    notes: promise.notes,
++    baseStatus: promise.baseStatus,
++    escalationLevel: promise.escalationLevel,
++    version: promise.version,
++  });
++}
++
++function lockSnapshot(row: PromiseLockRow): Readonly<Record<string, unknown>> {
++  const promised = safeInteger(row.promised_amount_minor, "promised amount");
++  const fulfilled = safeInteger(row.fulfilled_amount_minor, "fulfilled amount");
++  return Object.freeze({
++    id: row.id,
++    customerId: row.customer_id,
++    customerAccountId: row.customer_account_id,
++    representativeId: row.representative_id,
++    currencyCode: row.currency_code,
++    promisedAmountMinor: promised,
++    fulfilledAmountMinor: fulfilled,
++    remainingAmountMinor: promised - fulfilled,
++    promiseDate: toDateString(row.promise_date),
++    dueDate: toDateString(row.due_date),
++    nextFollowUpAt: toOptionalIsoString(row.next_follow_up_at),
++    debtReason: row.debt_reason,
++    delayReason: row.delay_reason,
++    notes: row.notes,
++    baseStatus: row.base_status,
++    escalationLevel: safeInteger(row.escalation_level, "escalation level"),
++    version: safeInteger(row.version, "version"),
++  });
++}
++
++function followUpSnapshot(row: FollowUpRow): Readonly<Record<string, unknown>> {
++  return Object.freeze({
++    id: row.id,
++    scheduledAt: toIsoString(row.scheduled_at),
++    completedAt: toOptionalIsoString(row.completed_at),
++    outcome: row.outcome,
++    notes: row.notes,
++  });
++}
++
++function allocationSnapshot(row: AllocationRow): Readonly<Record<string, unknown>> {
++  return Object.freeze({
++    id: row.id,
++    collectionId: row.collection_id,
++    currencyCode: row.currency_code,
++    amountMinor: safeInteger(row.amount_minor, "allocation amount"),
++    allocatedAt: toIsoString(row.allocated_at),
++    reversedAt: toOptionalIsoString(row.reversed_at),
++    reversalReason: row.reversal_reason,
++  });
++}
++
++function normalizePayload(value: object): Readonly<Record<string, unknown>> {
++  return Object.freeze(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
++}
++
++function jsonEqual(left: unknown, right: unknown): boolean {
++  return JSON.stringify(sortJson(left)) === JSON.stringify(sortJson(right));
++}
++
++function sortJson(value: unknown): unknown {
++  if (Array.isArray(value)) return value.map(sortJson);
++  if (value && typeof value === "object") {
++    return Object.fromEntries(
++      Object.entries(value as Record<string, unknown>)
++        .sort(([left], [right]) => left.localeCompare(right))
