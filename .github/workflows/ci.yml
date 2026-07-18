@@ -90,7 +90,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: payment-promises-review-fix-diagnostics
-          path: /tmp/review-fix.log
+          path: |
+            /tmp/review-fix.log
+            /tmp/review-fixes-full.patch
+            /tmp/review-fixes.patch
           if-no-files-found: ignore
           retention-days: 1
 
