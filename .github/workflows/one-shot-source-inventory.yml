@@ -1,21 +1,19 @@
 name: One-shot source inventory
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/payment-promises-engine
+      - main
 
 permissions:
   contents: read
 
 jobs:
   export:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: feature/payment-promises-engine
           fetch-depth: 1
       - name: Package repository source
         run: |
