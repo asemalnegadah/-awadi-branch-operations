@@ -2,7 +2,7 @@
 
 **النطاق:** فرع العوادي في عدن فقط  
 **القرار المعماري:** ADR-0001  
-**Migrations:** `0016_payment_promises_engine.sql` و`0017_payment_promises_cursor_precision.sql` و`0018_payment_promises_review_hardening.sql`
+**Migrations:** `0016_payment_promises_engine.sql` و`0017_payment_promises_cursor_precision.sql` و`0018_payment_promises_review_hardening.sql` و`0019_payment_promises_idempotency_canonicalization.sql`
 
 ## حدود الإصدار
 
@@ -48,9 +48,11 @@
 
 - الإنشاء والمتابعة والتخصيص والعكس والعمليات الحساسة تستخدم مفاتيح Idempotency فريدة.
 - يولّد Trigger PostgreSQL نسخة JSON غير قابلة للتعديل من طلب إنشاء الوعد داخل نفس INSERT، وتستخدم عند إعادة المحاولة بدل مقارنة صف الوعد القابل للتحديث.
+- تطبع قيمة `nextFollowUpAt` إلى UTC بصيغة milliseconds في كل من طلب التطبيق وPayload قاعدة البيانات، لذلك تعيد الطلبات ذات الإزاحات الزمنية النتيجة نفسها.
 - تُربط قيم الأحداث والتدقيق كـJSONB typed، وتُحسم مساواة إعادة الطلب داخل PostgreSQL باستخدام المقارنة canonical لـJSONB بدل مقارنة serialization في TypeScript.
 - إعادة الطلب المطابق تعيد النتيجة السابقة، وإعادة المفتاح بطلب مختلف ترفض بتعارض.
-- يعاد فحص Idempotency بعد الحصول على قفل صف الوعد للكتابات المتزامنة، حتى تعيد العملية الثانية نتيجة العملية الأولى بدل تعارض `version`.
+- يعاد فحص Idempotency بعد الحصول على قفل صف الوعد للكتابات المتزامنة، بما في ذلك التحديثات والحالات النهائية والتصعيد والمتابعات.
+- عند تنافس عمليتي عكس تخصيص بالمفتاح نفسه، تعيد العملية المنتظرة سجل العكس الموثق بدل إرجاع تعارض.
 - تحديث بيانات الوعد يتطلب `version` لمنع Lost Updates.
 - ترتيب Cursor ثابت حسب `due_date, created_at, id`، وتطبّع دقة `created_at` إلى milliseconds لمنع إعادة آخر صف بين الصفحات.
 - القيود والتريجرات في PostgreSQL تبقى خط الدفاع الأخير حتى عند الكتابة خارج خدمة التطبيق.
