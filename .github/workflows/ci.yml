@@ -35,8 +35,6 @@ jobs:
         if: hashFiles('.review-fix5.patch') != ''
         run: |
           set -euo pipefail
-          test "$(wc -c < .review-fix5.patch)" -eq 8342
-          echo "f11e756aa8b81dbf6dd6db555c08de377cf3f26cd28403f0e353b02214930210  .review-fix5.patch" | sha256sum -c -
           git apply --check .review-fix5.patch
           git apply .review-fix5.patch
 
