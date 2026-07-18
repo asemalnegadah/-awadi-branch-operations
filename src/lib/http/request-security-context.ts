@@ -73,7 +73,9 @@ function isIpv6Address(value: string): boolean {
   }
 
   const left = parseIpv6Side(compressionParts[0] ?? "", hasCompression);
-  const right = parseIpv6Side(compressionParts[1] ?? "", hasCompression);
+  const right = hasCompression
+    ? parseIpv6Side(compressionParts[1] ?? "", true)
+    : { valid: true, groupCount: 0, hasIpv4: false };
   if (!left.valid || !right.valid) return false;
   if (left.hasIpv4 && hasCompression) return false;
 
