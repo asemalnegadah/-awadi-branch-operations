@@ -860,9 +860,14 @@ async function getAuthenticatedSessionByHash(
   const row = rows[0];
   if (!row) return null;
   if (touch) {
+    const touchIntervalMinutes = Math.max(
+      1,
+      Math.min(5, Math.floor(idleTimeoutMinutes / 2)),
+    );
     await sql`
       UPDATE user_sessions SET last_seen_at = now()
-      WHERE id = ${row.session_id} AND last_seen_at < now() - interval '5 minutes'
+      WHERE id = ${row.session_id}
+        AND last_seen_at < now() - (${touchIntervalMinutes} * interval '1 minute')
     `;
   }
   const roles = row.roles.filter(isSystemRoleCode) as SystemRoleCode[];

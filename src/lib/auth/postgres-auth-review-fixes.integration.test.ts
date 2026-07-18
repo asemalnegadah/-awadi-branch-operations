@@ -18,6 +18,7 @@ const sql = getDatabaseClient();
 const authSecret = "review-fixes-integration-auth-secret-2026";
 const staleEmail = "credential.version.drift@example.test";
 const idleEmail = "idle.audit.integration@example.test";
+const touchEmail = "idle.touch.minimum@example.test";
 const oldPassword = "Old-Password-For-Review-2026";
 const newPassword = "New-Password-For-Review-2026";
 
@@ -26,6 +27,7 @@ beforeAll(async () => {
   for (const [email, fullName] of [
     [staleEmail, "اختبار تغير نسخة كلمة المرور"],
     [idleEmail, "اختبار تدقيق انتهاء الخمول"],
+    [touchEmail, "اختبار تحديث الجلسة النشطة"],
   ] as const) {
     const rows = await sql<{ id: string }[]>`
       INSERT INTO users (
@@ -192,6 +194,40 @@ describe("authentication review regressions", () => {
         metadata: { trigger: "SESSION_READ" },
       },
     ]);
+  });
+
+  it("يحدث الجلسة النشطة قبل مهلة الخمول الدنيا", async () => {
+    const login = await loginPostgres(
+      sql,
+      { email: touchEmail, password: oldPassword },
+      context("127.0.4.13"),
+      { authSecret, sessionTtlHours: 8, sessionIdleTimeoutMinutes: 5 },
+    );
+    await sql`
+      UPDATE user_sessions
+      SET last_seen_at = now() - interval '4 minutes'
+      WHERE id = ${login.session.id}
+    `;
+
+    const loaded = await getAuthenticatedSessionByToken(
+      sql,
+      login.token,
+      authSecret,
+      5,
+      context("127.0.4.14"),
+    );
+    expect(loaded?.id).toBe(login.session.id);
+
+    const rows = await sql<
+      { revoked_at: Date | null; refreshed: boolean }[]
+    >`
+      SELECT
+        revoked_at,
+        last_seen_at > now() - interval '1 minute' AS refreshed
+      FROM user_sessions
+      WHERE id = ${login.session.id}
+    `;
+    expect(rows[0]).toEqual({ revoked_at: null, refreshed: true });
   });
 
   it("يبقي رسالة المصادقة الخارجية موحدة بعد تغير نسخة الاعتماد", async () => {
