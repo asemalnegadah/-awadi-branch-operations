@@ -1,0 +1,383 @@
++          <article className="card" key={`${currency.currencyCode}-overdue`}>
++            <span className="card-label">متأخر – {currency.currencyCode}</span>
++            <strong>{currency.overdueCount}</strong>
++            <small>العملة معروضة مستقلة</small>
++          </article>,
++          <article className="card" key={`${currency.currencyCode}-partial`}>
++            <span className="card-label">منفذ جزئيًا – {currency.currencyCode}</span>
++            <strong>{currency.partiallyFulfilledCount}</strong>
++            <small>{formatPromiseMoney(currency.fulfilledAmountMinor, currency.currencyCode)} منفذ</small>
++          </article>,
++          <article className="card" key={`${currency.currencyCode}-fulfilled`}>
++            <span className="card-label">منفذ – {currency.currencyCode}</span>
++            <strong>{currency.fulfilledCount}</strong>
++            <small>{currency.promiseCount} وعدًا في هذه العملة</small>
++          </article>,
++        ])}
++      </section>
++
++      <form className="promise-filters" method="get" aria-label="فلاتر الوعود">
++        <div className="promise-field">
++          <label htmlFor="q">بحث</label>
++          <input id="q" name="q" defaultValue={params.get("q") ?? ""} placeholder="العميل أو سبب الدين" />
++        </div>
++        <div className="promise-field">
++          <label htmlFor="currency">العملة</label>
++          <select id="currency" name="currency" defaultValue={params.get("currency") ?? ""}>
++            <option value="">الكل</option><option value="SR">SR</option><option value="RG">RG</option>
++          </select>
++        </div>
++        <div className="promise-field">
++          <label htmlFor="status">الحالة</label>
++          <select id="status" name="status" defaultValue={params.get("status") ?? ""}>
++            <option value="">الكل</option>
++            <option value="NEW">جديد</option><option value="UPCOMING">قادم</option>
++            <option value="PARTIALLY_FULFILLED">منفذ جزئيًا</option><option value="FULFILLED">منفذ</option>
++            <option value="REJECTED">مرفوض</option><option value="CANCELLED">ملغي</option>
++          </select>
++        </div>
++        <div className="promise-field">
++          <label htmlFor="temporalStatus">الحالة الزمنية</label>
++          <select id="temporalStatus" name="temporalStatus" defaultValue={params.get("temporalStatus") ?? ""}>
++            <option value="">الكل</option><option value="DUE_TODAY">مستحق اليوم</option><option value="OVERDUE">متأخر</option>
++          </select>
++        </div>
++        <div className="promise-field">
++          <label htmlFor="dueDateFrom">الاستحقاق من</label>
++          <input id="dueDateFrom" name="dueDateFrom" type="date" defaultValue={params.get("dueDateFrom") ?? ""} />
++        </div>
++        <div className="promise-field">
++          <label htmlFor="dueDateTo">الاستحقاق إلى</label>
++          <input id="dueDateTo" name="dueDateTo" type="date" defaultValue={params.get("dueDateTo") ?? ""} />
++        </div>
++        <div className="promise-field">
++          <label htmlFor="escalationLevel">التصعيد</label>
++          <select id="escalationLevel" name="escalationLevel" defaultValue={params.get("escalationLevel") ?? ""}>
++            <option value="">الكل</option>{[0,1,2,3,4,5].map((level) => <option key={level} value={level}>{level}</option>)}
++          </select>
++        </div>
++        <div className="filter-actions">
++          <button className="primary-button" type="submit">تطبيق</button>
++          <Link className="secondary-button button-link" href="/promises">مسح</Link>
++        </div>
++      </form>
++
++      {page.items.length === 0 ? (
++        <section className="promise-empty"><h2>لا توجد نتائج</h2><p>عدّل الفلاتر أو أنشئ وعدًا جديدًا بحسب صلاحيتك.</p></section>
++      ) : (
++        <div className="promise-table-wrap">
++          <table className="promise-table">
++            <thead><tr><th>العميل</th><th>المندوب</th><th>العملة</th><th>الموعود</th><th>المنفذ</th><th>المتبقي</th><th>الاستحقاق</th><th>الحالة</th></tr></thead>
++            <tbody>
++              {page.items.map((promise) => {
++                const temporal = promiseTemporalLabel(promise);
++                return (
++                  <tr key={promise.id}>
++                    <td><Link className="promise-link" href={`/promises/${promise.id}`}>{promise.customerName}</Link><br /><small>{promise.customerNumber ?? "بلا رقم"}</small></td>
++                    <td>{promise.representativeName}</td><td><strong>{promise.currencyCode}</strong></td>
++                    <td>{formatPromiseMoney(promise.promisedAmountMinor, promise.currencyCode)}</td>
++                    <td>{formatPromiseMoney(promise.fulfilledAmountMinor, promise.currencyCode)}</td>
++                    <td>{formatPromiseMoney(promise.remainingAmountMinor, promise.currencyCode)}</td>
++                    <td>{promise.dueDate}{temporal ? <><br /><span className={`status-pill ${promise.temporalStatus === "OVERDUE" ? "overdue" : "due"}`}>{temporal}</span></> : null}</td>
++                    <td><span className={`status-pill ${promise.baseStatus === "FULFILLED" ? "fulfilled" : ""}`}>{promiseStatusLabel(promise.baseStatus)}</span></td>
++                  </tr>
++                );
++              })}
++            </tbody>
++          </table>
++        </div>
++      )}
++
++      {page.nextCursor ? (
++        <nav className="promise-pagination">
++          <Link className="secondary-button button-link" href={nextPageHref(params, page.nextCursor) as Route}>الصفحة التالية</Link>
++        </nav>
++      ) : null}
++    </main>
++  );
++}
++
++function toUrlSearchParams(raw: Record<string, SearchValue>): URLSearchParams {
++  const params = new URLSearchParams();
++  for (const [key, value] of Object.entries(raw)) {
++    if (typeof value === "string") params.set(key, value);
++    else if (Array.isArray(value)) for (const item of value) params.append(key, item);
++  }
++  return params;
++}
++
++function nextPageHref(params: URLSearchParams, cursor: string): string {
++  const next = new URLSearchParams(params);
++  next.set("cursor", cursor);
++  return `/promises?${next.toString()}`;
++}
+diff --git a/src/app/promises/promises.css b/src/app/promises/promises.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d55ea898ec4b2c4c4ee3cd7a8570e56dcda8bbc
+--- /dev/null
++++ b/src/app/promises/promises.css
+@@ -0,0 +1,68 @@
++.promises-shell { padding-top: 24px; }
++.promises-header, .promise-detail-header {
++  display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
++  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
++  padding: clamp(22px, 4vw, 36px); box-shadow: var(--shadow);
++}
++.promises-header h1, .promise-detail-header h1 { margin-bottom: 8px; font-size: clamp(1.8rem, 4vw, 3rem); }
++.promises-actions, .inline-actions { display: flex; flex-wrap: wrap; gap: 10px; }
++.button-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
++.promises-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
++.promise-currency-group { margin-top: 22px; }
++.promise-currency-group h2 { display: flex; gap: 8px; align-items: center; }
++.promise-filters, .promise-form, .promise-action-form {
++  display: grid; gap: 14px; border: 1px solid var(--border); border-radius: var(--radius);
++  background: var(--surface); padding: 20px; box-shadow: var(--shadow);
++}
++.promise-filters { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 22px; }
++.promise-filters .filter-actions { display: flex; align-items: end; gap: 8px; }
++.promise-field { display: grid; gap: 7px; }
++.promise-field label { font-weight: 700; font-size: .92rem; }
++.promise-field input, .promise-field select, .promise-field textarea {
++  width: 100%; min-height: 44px; border: 1px solid #b9c2d0; border-radius: 10px;
++  background: #fff; padding: 9px 11px; color: var(--text);
++}
++.promise-field textarea { min-height: 92px; resize: vertical; }
++.promise-field input:focus, .promise-field select:focus, .promise-field textarea:focus {
++  outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(23,92,211,.12);
++}
++.promise-table-wrap { margin-top: 22px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); }
++.promise-table { width: 100%; border-collapse: collapse; min-width: 900px; }
++.promise-table th, .promise-table td { padding: 14px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: top; }
++.promise-table th { background: #f8fafc; color: var(--muted); font-size: .88rem; }
++.promise-table tr:last-child td { border-bottom: 0; }
++.promise-link { color: var(--primary); font-weight: 700; text-decoration: none; }
++.status-pill { display: inline-flex; border-radius: 999px; padding: 5px 10px; background: #eef4ff; color: #3538cd; font-size: .82rem; font-weight: 700; }
++.status-pill.overdue { background: var(--danger-soft); color: var(--danger); }
++.status-pill.due { background: #fffaeb; color: #b54708; }
++.status-pill.fulfilled { background: var(--success-soft); color: var(--success); }
++.promise-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
++.promise-empty { margin-top: 22px; text-align: center; padding: 48px 20px; border: 1px dashed #b9c2d0; border-radius: var(--radius); background: #fff; color: var(--muted); }
++.promise-form-page { max-width: 860px; }
++.promise-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++.promise-form .full-width { grid-column: 1 / -1; }
++.promise-form-message { grid-column: 1 / -1; margin: 0; }
++.promise-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
++.promise-detail-grid .card { min-height: 110px; }
++.promise-section { margin-top: 22px; }
++.promise-section-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
++.promise-timeline { display: grid; gap: 12px; padding: 0; list-style: none; }
++.promise-timeline li { border-right: 4px solid var(--primary); border-radius: 10px; background: #fff; padding: 14px 18px; box-shadow: var(--shadow); }
++.promise-timeline p { margin-bottom: 4px; }
++.promise-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
++.promise-action-form { box-shadow: none; }
++.promise-action-form h3 { margin: 0; }
++.promise-danger-button { min-height: 44px; border: 1px solid var(--danger); border-radius: 10px; background: var(--danger); padding: 9px 14px; color: #fff; font-weight: 700; }
++.promise-loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
++.promise-error { max-width: 720px; margin: 80px auto; }
++@media (max-width: 900px) {
++  .promise-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  .promises-summary, .promise-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++}
++@media (max-width: 620px) {
++  .promises-header, .promise-detail-header { flex-direction: column; }
++  .promise-filters, .promise-form, .promise-action-grid { grid-template-columns: 1fr; }
++  .promise-form .full-width { grid-column: auto; }
++  .promises-summary, .promise-detail-grid { grid-template-columns: 1fr; }
++  .promises-actions, .promises-actions > * { width: 100%; }
++}
+diff --git a/src/lib/auth/permissions.ts b/src/lib/auth/permissions.ts
+index 2ed6cdc523bc34f1baf7744ed9a73cd561664b88..daf16a809186fd71c10af5bf622562187c2a9042 100644
+--- a/src/lib/auth/permissions.ts
++++ b/src/lib/auth/permissions.ts
+@@ -13,6 +13,16 @@ export const permissionCodes = [
+   "collections.review",
+   "collections.approve",
+   "collections.reverse",
++  "promises.read",
++  "promises.create",
++  "promises.update",
++  "promises.follow_up",
++  "promises.reject",
++  "promises.cancel",
++  "promises.allocate_collection",
++  "promises.reverse_allocation",
++  "promises.escalate",
++  "promises.view_history",
+   "plans.read_own",
+   "plans.manage",
+   "plans.approve",
+diff --git a/src/lib/promises/api.ts b/src/lib/promises/api.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4560dbf2e4168b0a017d4d806ceed923bff97196
+--- /dev/null
++++ b/src/lib/promises/api.ts
+@@ -0,0 +1,211 @@
++import { NextRequest, NextResponse } from "next/server";
++import { ZodError } from "zod";
++
++import { requirePermission } from "@/lib/auth/authorization";
++import { getCurrentSession } from "@/lib/auth/current-session";
++import type { PermissionCode } from "@/lib/auth/permissions";
++import { AuthorizationError } from "@/lib/auth/types";
++import { getAuthEnv } from "@/lib/config/server-env";
++import { getRequestSecurityContext } from "@/lib/http/request-security-context";
++import { validateWriteRequestOrigin } from "@/lib/http/same-origin";
++import { safeErrorMetadata } from "@/lib/security/safe-error";
++
++import {
++  PromiseBusinessRuleError,
++  PromiseConflictError,
++  PromiseIdempotencyConflictError,
++  PromiseInputError,
++  PromiseNotFoundError,
++} from "./errors";
++import type { PromiseCommandContext, PromiseReadContext } from "./types";
++import { parseIdempotencyKey } from "./validation";
++
++export type PromiseApiAuthorization =
++  | {
++      readonly ok: true;
++      readonly readContext: PromiseReadContext;
++      readonly requestContext: ReturnType<typeof getRequestSecurityContext>;
++      readonly sessionId: string;
++    }
++  | { readonly ok: false; readonly response: NextResponse };
++
++export async function authorizePromiseApiRequest(
++  request: NextRequest,
++  permission: PermissionCode,
++  write: boolean,
++): Promise<PromiseApiAuthorization> {
++  const requestContext = getRequestSecurityContext(request);
++  try {
++    if (write) {
++      const origin = validateWriteRequestOrigin(request, getAuthEnv().TRUSTED_ORIGIN_SET);
++      if (!origin.allowed) {
++        return {
++          ok: false,
++          response: promiseJson(
++            {
++              success: false,
++              error: { code: "ORIGIN_REJECTED", message: "تم رفض مصدر الطلب." },
++              requestId: requestContext.requestId,
++            },
++            403,
++            requestContext.requestId,
++          ),
++        };
++      }
++    }
++
++    const session = await getCurrentSession();
++    if (!session) {
++      return {
++        ok: false,
++        response: promiseJson(
++          {
++            success: false,
++            error: { code: "UNAUTHENTICATED", message: "يلزم تسجيل الدخول." },
++            requestId: requestContext.requestId,
++          },
++          401,
++          requestContext.requestId,
++        ),
++      };
++    }
++    requirePermission(session.user, permission);
++    return {
++      ok: true,
++      readContext: Object.freeze({ actor: session.user }),
++      requestContext,
++      sessionId: session.id,
++    };
++  } catch (error) {
++    if (error instanceof AuthorizationError) {
++      return {
++        ok: false,
++        response: promiseJson(
++          {
++            success: false,
++            error: { code: "FORBIDDEN", message: error.message },
++            requestId: requestContext.requestId,
++          },
++          403,
++          requestContext.requestId,
++        ),
++      };
++    }
++    return {
++      ok: false,
++      response: promiseApiError(error, requestContext.requestId),
++    };
++  }
++}
++
++export function buildPromiseCommandContext(
++  authorization: Extract<PromiseApiAuthorization, { readonly ok: true }>,
++  request: NextRequest,
++): PromiseCommandContext {
++  return Object.freeze({
++    actor: authorization.readContext.actor,
++    request: authorization.requestContext,
++    idempotencyKey: parseIdempotencyKey(request.headers.get("idempotency-key")),
++    sessionId: authorization.sessionId,
++  });
++}
++
++export async function readPromiseJson(request: NextRequest): Promise<unknown> {
++  try {
++    return await request.json();
++  } catch {
++    throw new PromiseInputError("جسم الطلب ليس JSON صالحًا.");
++  }
++}
++
++export function promiseApiError(error: unknown, requestId: string): NextResponse {
++  if (error instanceof ZodError || error instanceof PromiseInputError) {
++    const message = error instanceof ZodError
++      ? error.issues[0]?.message ?? "بيانات الطلب غير صالحة."
++      : error.message;
++    return promiseJson(
++      { success: false, error: { code: "INVALID_REQUEST", message }, requestId },
++      error instanceof ZodError ? 422 : 400,
++      requestId,
++    );
++  }
++  if (error instanceof AuthorizationError) {
++    return promiseJson(
++      { success: false, error: { code: "FORBIDDEN", message: error.message }, requestId },
++      403,
++      requestId,
++    );
++  }
++  if (error instanceof PromiseNotFoundError) {
++    return promiseJson(
++      { success: false, error: { code: "NOT_FOUND", message: error.message }, requestId },
++      404,
++      requestId,
++    );
++  }
++  if (error instanceof PromiseConflictError || error instanceof PromiseIdempotencyConflictError) {
++    return promiseJson(
++      { success: false, error: { code: "CONFLICT", message: error.message }, requestId },
++      409,
++      requestId,
++    );
++  }
++  if (error instanceof PromiseBusinessRuleError) {
++    return promiseJson(
++      { success: false, error: { code: "BUSINESS_RULE", message: error.message }, requestId },
++      422,
++      requestId,
++    );
++  }
++
++  const code = postgresCode(error);
++  if (code === "23505") {
++    return promiseJson(
++      {
++        success: false,
++        error: { code: "CONFLICT", message: "توجد عملية مسجلة بالبيانات نفسها." },
++        requestId,
++      },
++      409,
