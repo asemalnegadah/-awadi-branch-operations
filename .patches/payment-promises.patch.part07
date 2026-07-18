@@ -1,0 +1,554 @@
++      { version, notes: "التحديث الأول" },
++      context("version-update-one"),
++    );
++    const second = updatePromisePostgres(
++      sql,
++      promise.promise.id,
++      { version, notes: "التحديث الثاني" },
++      context("version-update-two"),
++    );
++    const settled = await Promise.allSettled([first, second]);
++    expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
++    const rejection = settled.find((item) => item.status === "rejected");
++    expect(rejection && rejection.status === "rejected" ? rejection.reason : null)
++      .toBeInstanceOf(PromiseConflictError);
++  });
++
++  it("يسلسل تخصيصات متزامنة على الوعد نفسه عبر اتصالات مستقلة", async () => {
++    const promise = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 10_000 }),
++      context("concurrent-promise"),
++    );
++    const collectionOne = await createConfirmedCollection(sql, { amountMinor: 7_000 });
++    const collectionTwo = await createConfirmedCollection(sql, { amountMinor: 7_000 });
++    const clientOne = isolatedClient();
++    const clientTwo = isolatedClient();
++    try {
++      const settled = await Promise.allSettled([
++        allocateConfirmedCollectionPostgres(
++          clientOne,
++          promise.promise.id,
++          { collectionId: collectionOne, amountMinor: 7_000 },
++          context("concurrent-promise-one"),
++        ),
++        allocateConfirmedCollectionPostgres(
++          clientTwo,
++          promise.promise.id,
++          { collectionId: collectionTwo, amountMinor: 7_000 },
++          context("concurrent-promise-two"),
++        ),
++      ]);
++      expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
++      const rows = await sql<{ total: string }[]>`
++        SELECT COALESCE(SUM(amount_minor), 0)::text AS total
++        FROM payment_promise_allocations
++        WHERE promise_id = ${promise.promise.id} AND reversed_at IS NULL
++      `;
++      expect(Number(rows[0]?.total)).toBe(7_000);
++    } finally {
++      await Promise.all([clientOne.end(), clientTwo.end()]);
++    }
++  });
++
++  it("يسلسل تخصيصات متزامنة على التحصيل نفسه عبر اتصالات مستقلة", async () => {
++    const promiseOne = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 10_000 }),
++      context("same-collection-promise-one"),
++    );
++    const promiseTwo = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 10_000 }),
++      context("same-collection-promise-two"),
++    );
++    const collection = await createConfirmedCollection(sql, { amountMinor: 10_000 });
++    const clientOne = isolatedClient();
++    const clientTwo = isolatedClient();
++    try {
++      const settled = await Promise.allSettled([
++        allocateConfirmedCollectionPostgres(
++          clientOne,
++          promiseOne.promise.id,
++          { collectionId: collection, amountMinor: 7_000 },
++          context("same-collection-one"),
++        ),
++        allocateConfirmedCollectionPostgres(
++          clientTwo,
++          promiseTwo.promise.id,
++          { collectionId: collection, amountMinor: 7_000 },
++          context("same-collection-two"),
++        ),
++      ]);
++      expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
++      const rows = await sql<{ total: string }[]>`
++        SELECT COALESCE(SUM(amount_minor), 0)::text AS total
++        FROM payment_promise_allocations
++        WHERE collection_id = ${collection} AND reversed_at IS NULL
++      `;
++      expect(Number(rows[0]?.total)).toBe(7_000);
++    } finally {
++      await Promise.all([clientOne.end(), clientTwo.end()]);
++    }
++  });
++
++  it("يمنع UPDATE وDELETE في سجل الأحداث", async () => {
++    const promise = await createPromisePostgres(sql, promiseInput(), context("append-only-promise"));
++    const events = await getPromiseHistoryPostgres(sql, promise.promise.id);
++    const eventId = events[0]?.id;
++    if (!eventId) throw new Error("expected promise event");
++    await expect(
++      sql`UPDATE payment_promise_events SET reason = 'غير مسموح' WHERE id = ${eventId}`,
++    ).rejects.toBeDefined();
++    await expect(
++      sql`DELETE FROM payment_promise_events WHERE id = ${eventId}`,
++    ).rejects.toBeDefined();
++  });
++
++  it("يوفر Pagination ثابتة وفلاتر وملخصات مفصولة حسب العملة", async () => {
++    for (let index = 0; index < 3; index += 1) {
++      await createPromisePostgres(
++        sql,
++        promiseInput({
++          dueDate: `2026-07-${String(21 + index).padStart(2, "0")}`,
++          notes: `بحث ثابت ${index}`,
++        }),
++        context(`pagination-${index}`),
++      );
++    }
++    await createPromisePostgres(
++      sql,
++      promiseInput({
++        customerAccountId: rgAccountId,
++        currencyCode: "RG",
++        notes: "ملخص RG",
++      }),
++      context("summary-rg"),
++    );
++
++    const firstPage = await listPromisesPostgres(sql, {
++      customerId,
++      query: "بحث ثابت",
++      limit: 2,
++    });
++    expect(firstPage.items).toHaveLength(2);
++    expect(firstPage.nextCursor).toBeTruthy();
++    const secondPage = await listPromisesPostgres(sql, {
++      customerId,
++      query: "بحث ثابت",
++      limit: 2,
++      cursor: firstPage.nextCursor ?? undefined,
++    });
++    expect(secondPage.items).toHaveLength(1);
++    expect(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size)
++      .toBe(3);
++
++    const customerSummary = await getCustomerPromiseSummaryPostgres(sql, customerId);
++    expect(customerSummary?.currencies.map((item) => item.currencyCode)).toEqual(
++      expect.arrayContaining(["SR", "RG"]),
++    );
++    const salespersonSummary = await getSalespersonPromiseSummaryPostgres(
++      sql,
++      representativeId,
++    );
++    expect(salespersonSummary?.representativeId).toBe(representativeId);
++  });
++
++  it("يتراجع بالكامل إذا فشل تسجيل الحدث داخل Transaction", async () => {
++    const promise = await createPromisePostgres(
++      sql,
++      promiseInput({ promisedAmountMinor: 2_000 }),
++      context("rollback-promise"),
++    );
++    const collection = await createConfirmedCollection(sql, { amountMinor: 2_000 });
++    const failureKey = `${runKey}-rollback-allocation`;
++    await sql.unsafe(`
++      CREATE OR REPLACE FUNCTION fail_selected_promise_event_for_test()
++      RETURNS trigger
++      LANGUAGE plpgsql
++      AS $$
++      BEGIN
++        IF NEW.idempotency_key = '${failureKey}' THEN
++          RAISE EXCEPTION 'forced promise event failure';
++        END IF;
++        RETURN NEW;
++      END;
++      $$
++    `);
++    await sql.unsafe(`
++      CREATE TRIGGER fail_selected_promise_event_for_test_trigger
++      BEFORE INSERT ON payment_promise_events
++      FOR EACH ROW EXECUTE FUNCTION fail_selected_promise_event_for_test()
++    `);
++    try {
++      await expect(
++        allocateConfirmedCollectionPostgres(
++          sql,
++          promise.promise.id,
++          { collectionId: collection, amountMinor: 2_000 },
++          context("rollback-allocation"),
++        ),
++      ).rejects.toBeDefined();
++      const allocationRows = await sql<{ count: string }[]>`
++        SELECT COUNT(*)::text AS count
++        FROM payment_promise_allocations
++        WHERE promise_id = ${promise.promise.id}
++      `;
++      const promiseRows = await sql<{ fulfilled: string }[]>`
++        SELECT fulfilled_amount_minor::text AS fulfilled
++        FROM payment_promises WHERE id = ${promise.promise.id}
++      `;
++      expect(allocationRows[0]?.count).toBe("0");
++      expect(promiseRows[0]?.fulfilled).toBe("0");
++    } finally {
++      await sql.unsafe(`
++        DROP TRIGGER IF EXISTS fail_selected_promise_event_for_test_trigger
++          ON payment_promise_events
++      `);
++      await sql.unsafe(`DROP FUNCTION IF EXISTS fail_selected_promise_event_for_test()`);
++    }
++  });
++});
++
++function isolatedClient(): Sql {
++  const databaseUrl = process.env.DATABASE_URL;
++  if (!databaseUrl) throw new Error("DATABASE_URL is required for integration tests");
++  return postgres(databaseUrl, { max: 1, prepare: false });
++}
+diff --git a/src/lib/promises/postgres-repository.ts b/src/lib/promises/postgres-repository.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e435e1a822c7e102266efbc5eebdadad9c0ed9f1
+--- /dev/null
++++ b/src/lib/promises/postgres-repository.ts
+@@ -0,0 +1,1936 @@
++import type { Sql } from "postgres";
++
++import type { CurrencyCode } from "@/lib/domain/currency";
++
++import {
++  PromiseBusinessRuleError,
++  PromiseConflictError,
++  PromiseIdempotencyConflictError,
++  PromiseNotFoundError,
++} from "./errors";
++import type {
++  AddFollowUpInput,
++  AllocateCollectionInput,
++  CancelPromiseInput,
++  ConfirmedCollectionOption,
++  CreatePromiseInput,
++  CurrencyPromiseSummary,
++  CustomerPromiseSummary,
++  EscalatePromiseInput,
++  PaymentPromise,
++  PaymentPromiseAllocation,
++  PaymentPromiseDetails,
++  PaymentPromiseEvent,
++  PaymentPromiseFollowUp,
++  PromiseBaseStatus,
++  PromiseCommandContext,
++  PromiseEventType,
++  PromiseFormOptions,
++  PromiseListFilters,
++  PromisePage,
++  PromiseTemporalStatus,
++  RejectPromiseInput,
++  ReverseAllocationInput,
++  SalespersonPromiseSummary,
++  UpdatePromiseInput,
++} from "./types";
++
++interface PromiseRow {
++  id: string;
++  customer_id: string;
++  customer_account_id: string;
++  customer_name: string;
++  customer_number: string | null;
++  representative_id: string;
++  representative_name: string;
++  currency_code: CurrencyCode;
++  promised_amount_minor: string | number;
++  fulfilled_amount_minor: string | number;
++  remaining_amount_minor: string | number;
++  promise_date: Date | string;
++  due_date: Date | string;
++  next_follow_up_at: Date | string | null;
++  debt_reason: string;
++  delay_reason: string | null;
++  notes: string | null;
++  base_status: PromiseBaseStatus;
++  temporal_status: PromiseTemporalStatus | null;
++  escalation_level: string | number;
++  rejected_at: Date | string | null;
++  rejected_by: string | null;
++  rejection_reason: string | null;
++  cancelled_at: Date | string | null;
++  cancelled_by: string | null;
++  cancellation_reason: string | null;
++  created_by: string;
++  created_at: Date | string;
++  updated_by: string;
++  updated_at: Date | string;
++  version: string | number;
++}
++
++interface PromiseLockRow {
++  id: string;
++  customer_id: string;
++  customer_account_id: string;
++  representative_id: string;
++  currency_code: CurrencyCode;
++  promised_amount_minor: string | number;
++  fulfilled_amount_minor: string | number;
++  promise_date: Date | string;
++  due_date: Date | string;
++  next_follow_up_at: Date | string | null;
++  debt_reason: string;
++  delay_reason: string | null;
++  notes: string | null;
++  base_status: PromiseBaseStatus;
++  escalation_level: string | number;
++  version: string | number;
++}
++
++interface EventRow {
++  id: string;
++  promise_id: string;
++  actor_user_id: string;
++  actor_name: string;
++  occurred_at: Date | string;
++  request_id: string;
++  event_type: PromiseEventType;
++  old_values: unknown;
++  new_values: unknown;
++  operation_payload: unknown;
++  reason: string | null;
++  source_entity: string | null;
++  source_id: string | null;
++  idempotency_key: string | null;
++}
++
++interface FollowUpRow {
++  id: string;
++  promise_id: string;
++  scheduled_at: Date | string;
++  completed_at: Date | string | null;
++  outcome: string | null;
++  notes: string | null;
++  created_by: string;
++  created_by_name: string;
++  created_at: Date | string;
++  request_id: string;
++  idempotency_key: string;
++}
++
++interface AllocationRow {
++  id: string;
++  promise_id: string;
++  collection_id: string;
++  currency_code: CurrencyCode;
++  amount_minor: string | number;
++  allocated_at: Date | string;
++  allocated_by: string;
++  allocated_by_name: string;
++  request_id: string;
++  idempotency_key: string;
++  reversed_at: Date | string | null;
++  reversed_by: string | null;
++  reversal_reason: string | null;
++  reversal_request_id: string | null;
++  reversal_idempotency_key: string | null;
++}
++
++interface CollectionLockRow {
++  id: string;
++  customer_id: string;
++  customer_account_id: string;
++  currency_code: CurrencyCode;
++  amount_minor: string | number;
++  receipt_number: string | null;
++  collected_at: Date | string;
++  state: string;
++  ledger_entry_id: string | null;
++  reversed_at: Date | string | null;
++}
++
++interface SummaryRow {
++  currency_code: CurrencyCode;
++  promise_count: string | number;
++  promised_amount_minor: string | number;
++  fulfilled_amount_minor: string | number;
++  remaining_amount_minor: string | number;
++  due_today_count: string | number;
++  overdue_count: string | number;
++  partially_fulfilled_count: string | number;
++  fulfilled_count: string | number;
++}
++
++type SqlParameter = string | number | boolean | Date | null;
++
++interface CursorPayload {
++  readonly dueDate: string;
++  readonly createdAt: string;
++  readonly id: string;
++}
++
++const openStatuses: readonly PromiseBaseStatus[] = [
++  "NEW",
++  "UPCOMING",
++  "PARTIALLY_FULFILLED",
++];
++
++const adenTodaySql = "(now() AT TIME ZONE 'Asia/Aden')::date";
++const promiseSelect = `
++  promise.id,
++  promise.customer_id,
++  promise.customer_account_id,
++  customer.trade_name_ar AS customer_name,
++  customer.customer_number,
++  promise.representative_id,
++  representative.full_name_ar AS representative_name,
++  promise.currency_code,
++  promise.promised_amount_minor,
++  promise.fulfilled_amount_minor,
++  promise.remaining_amount_minor,
++  promise.promise_date,
++  promise.due_date,
++  promise.next_follow_up_at,
++  promise.debt_reason,
++  promise.delay_reason,
++  promise.notes,
++  promise.base_status,
++  CASE
++    WHEN promise.base_status IN ('NEW', 'UPCOMING', 'PARTIALLY_FULFILLED')
++      AND promise.due_date = ${adenTodaySql}
++      THEN 'DUE_TODAY'
++    WHEN promise.base_status IN ('NEW', 'UPCOMING', 'PARTIALLY_FULFILLED')
++      AND promise.due_date < ${adenTodaySql}
++      THEN 'OVERDUE'
++    ELSE NULL
++  END AS temporal_status,
++  promise.escalation_level,
++  promise.rejected_at,
++  promise.rejected_by,
++  promise.rejection_reason,
++  promise.cancelled_at,
++  promise.cancelled_by,
++  promise.cancellation_reason,
++  promise.created_by,
++  promise.created_at,
++  promise.updated_by,
++  promise.updated_at,
++  promise.version
++`;
++
++const promiseJoins = `
++  FROM payment_promises AS promise
++  JOIN customers AS customer ON customer.id = promise.customer_id
++  JOIN sales_representatives AS representative
++    ON representative.id = promise.representative_id
++`;
++
++export async function createPromisePostgres(
++  sql: Sql,
++  input: CreatePromiseInput,
++  context: PromiseCommandContext,
++): Promise<{ readonly promise: PaymentPromise; readonly replayed: boolean }> {
++  return sql.begin(async (transaction) => {
++    const payload = normalizePayload(input);
++    const inserted = await transaction.unsafe<{ id: string }[]>(
++      `
++        INSERT INTO payment_promises (
++          customer_id,
++          customer_account_id,
++          representative_id,
++          currency_code,
++          promised_amount_minor,
++          promise_date,
++          due_date,
++          next_follow_up_at,
++          debt_reason,
++          delay_reason,
++          notes,
++          base_status,
++          created_by,
++          created_at,
++          updated_by,
++          updated_at,
++          idempotency_key
++        ) VALUES (
++          $1, $2, $3, $4, $5, $6::date, $7::date, $8::timestamptz,
++          $9, $10, $11, payment_promise_open_status($7::date),
++          $12, now(), $12, now(), $13
++        )
++        ON CONFLICT (idempotency_key) DO NOTHING
++        RETURNING id
++      `,
++      [
++        input.customerId,
++        input.customerAccountId,
++        input.representativeId,
++        input.currencyCode,
++        input.promisedAmountMinor,
++        input.promiseDate,
++        input.dueDate,
++        input.nextFollowUpAt ?? null,
++        input.debtReason,
++        input.delayReason ?? null,
++        input.notes ?? null,
++        context.actor.id,
++        context.idempotencyKey,
++      ],
++    );
++
++    if (!inserted[0]) {
++      const existing = await transaction.unsafe<
++        (PromiseLockRow & { idempotency_key: string })[]
++      >(
++        `
++          SELECT
++            id,
++            customer_id,
++            customer_account_id,
++            representative_id,
++            currency_code,
++            promised_amount_minor,
++            fulfilled_amount_minor,
++            promise_date,
++            due_date,
++            next_follow_up_at,
++            debt_reason,
++            delay_reason,
++            notes,
++            base_status,
++            escalation_level,
++            version,
++            idempotency_key
++          FROM payment_promises
++          WHERE idempotency_key = $1
++          FOR UPDATE
++        `,
++        [context.idempotencyKey],
++      );
++      const row = existing[0];
++      if (!row || !sameCreateInput(row, input)) {
++        throw new PromiseIdempotencyConflictError();
++      }
++      const promise = await requirePromiseById(transaction, row.id);
++      return Object.freeze({ promise, replayed: true });
++    }
++
++    const promise = await requirePromiseById(transaction, inserted[0].id);
++    await insertEvent(transaction, {
++      promiseId: promise.id,
++      context,
++      eventType: "CREATED",
++      oldValues: {},
++      newValues: promiseSnapshot(promise),
++      operationPayload: payload,
++      reason: null,
++      sourceEntity: null,
++      sourceId: null,
++      idempotencyKey: null,
++    });
++    await insertAudit(transaction, context, "promises.create", promise.id, null, promiseSnapshot(promise));
