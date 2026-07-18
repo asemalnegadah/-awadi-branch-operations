@@ -660,6 +660,63 @@ describe.sequential("PostgreSQL payment promises repository", () => {
     expect(replay.promise.notes).toBe("ملاحظات معدلة لاحقًا");
   });
 
+  it("يعيد إنشاء الوعد مع تطبيع nextFollowUpAt ذي الإزاحة الزمنية", async () => {
+    const createKey = "create-offset-timestamp";
+    const input = promiseInput({
+      nextFollowUpAt: "2026-07-20T12:00:00+03:00",
+    });
+    const created = await createPromisePostgres(sql, input, context(createKey));
+    const replay = await createPromisePostgres(sql, input, context(createKey));
+
+    expect(replay.replayed).toBe(true);
+    expect(replay.promise.id).toBe(created.promise.id);
+    const payloadRows = await sql<{ next_follow_up_at: string | null }[]>`
+      SELECT create_payload ->> 'nextFollowUpAt' AS next_follow_up_at
+      FROM payment_promises
+      WHERE id = ${created.promise.id}
+    `;
+    expect(payloadRows[0]?.next_follow_up_at).toBe(
+      "2026-07-20T09:00:00.000Z",
+    );
+  });
+
+  it("يعيد المتابعات المتزامنة ذات مفتاح Idempotency نفسه", async () => {
+    const promise = await createPromisePostgres(
+      sql,
+      promiseInput(),
+      context("contended-followup-promise"),
+    );
+    const clientOne = isolatedClient();
+    const clientTwo = isolatedClient();
+    const input = {
+      scheduledAt: "2026-07-21T09:00:00.000Z",
+      notes: "متابعة متزامنة",
+    };
+    try {
+      const results = await Promise.all([
+        addFollowUpPostgres(
+          clientOne,
+          promise.promise.id,
+          input,
+          context("contended-followup"),
+        ),
+        addFollowUpPostgres(
+          clientTwo,
+          promise.promise.id,
+          input,
+          context("contended-followup"),
+        ),
+      ]);
+      expect(results.map((result) => result.replayed).sort()).toEqual([
+        false,
+        true,
+      ]);
+      expect(results[0]?.followUp.id).toBe(results[1]?.followUp.id);
+    } finally {
+      await Promise.all([clientOne.end(), clientTwo.end()]);
+    }
+  });
+
   it("يعيد الكتابات المتزامنة ذات مفتاح Idempotency نفسه بدل تعارض version", async () => {
     const promise = await createPromisePostgres(
       sql,
@@ -754,6 +811,52 @@ describe.sequential("PostgreSQL payment promises repository", () => {
         escalationClientOne.end(),
         escalationClientTwo.end(),
       ]);
+    }
+  });
+
+  it("يعيد عكس التخصيص المتزامن ذي مفتاح Idempotency نفسه", async () => {
+    const promise = await createPromisePostgres(
+      sql,
+      promiseInput({ promisedAmountMinor: 2_500 }),
+      context("contended-reversal-promise"),
+    );
+    const collectionId = await createConfirmedCollection(sql, {
+      amountMinor: 2_500,
+    });
+    const allocation = await allocateConfirmedCollectionPostgres(
+      sql,
+      promise.promise.id,
+      { collectionId, amountMinor: 2_500 },
+      context("contended-reversal-allocation"),
+    );
+    const clientOne = isolatedClient();
+    const clientTwo = isolatedClient();
+    try {
+      const results = await Promise.all([
+        reverseCollectionAllocationPostgres(
+          clientOne,
+          promise.promise.id,
+          allocation.allocation.id,
+          { reason: "عكس متزامن" },
+          context("contended-reversal"),
+        ),
+        reverseCollectionAllocationPostgres(
+          clientTwo,
+          promise.promise.id,
+          allocation.allocation.id,
+          { reason: "عكس متزامن" },
+          context("contended-reversal"),
+        ),
+      ]);
+      expect(results.map((result) => result.replayed).sort()).toEqual([
+        false,
+        true,
+      ]);
+      expect(results[0]?.allocation.id).toBe(results[1]?.allocation.id);
+      expect(results[0]?.promise.fulfilledAmountMinor).toBe(0);
+      expect(results[1]?.promise.fulfilledAmountMinor).toBe(0);
+    } finally {
+      await Promise.all([clientOne.end(), clientTwo.end()]);
     }
   });
 

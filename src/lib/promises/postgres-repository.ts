@@ -733,6 +733,24 @@ export async function addFollowUpPostgres(
     }
 
     await lockPromise(transaction, promiseId, representativeScopeId);
+    const contendedRows = await transaction.unsafe<FollowUpRow[]>(
+      `${followUpSelect} WHERE followup.idempotency_key = $1 FOR UPDATE`,
+      [context.idempotencyKey],
+    );
+    if (contendedRows[0]) {
+      if (!sameFollowUpInput(contendedRows[0], promiseId, input)) {
+        throw new PromiseIdempotencyConflictError();
+      }
+      return Object.freeze({
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
+        followUp: mapFollowUpRow(contendedRows[0]),
+        replayed: true,
+      });
+    }
     const before = await requirePromiseById(
       transaction,
       promiseId,
@@ -1190,6 +1208,22 @@ export async function reverseCollectionAllocationPostgres(
       throw new PromiseNotFoundError();
     }
     if (allocationBefore.reversed_at) {
+      if (
+        allocationBefore.reversal_idempotency_key === context.idempotencyKey
+      ) {
+        if (allocationBefore.reversal_reason !== input.reason) {
+          throw new PromiseIdempotencyConflictError();
+        }
+        return Object.freeze({
+          promise: await requirePromiseById(
+            transaction,
+            promiseId,
+            representativeScopeId,
+          ),
+          allocation: mapAllocationRow(allocationBefore),
+          replayed: true,
+        });
+      }
       throw new PromiseConflictError("تم عكس هذا الربط مسبقًا.");
     }
 
@@ -2335,7 +2369,9 @@ function createOperationPayload(
     promisedAmountMinor: input.promisedAmountMinor,
     promiseDate: input.promiseDate,
     dueDate: input.dueDate,
-    nextFollowUpAt: input.nextFollowUpAt ?? null,
+    nextFollowUpAt: input.nextFollowUpAt
+      ? toIsoString(input.nextFollowUpAt)
+      : null,
     debtReason: input.debtReason,
     delayReason: input.delayReason ?? null,
     notes: input.notes ?? null,
