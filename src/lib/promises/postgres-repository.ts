@@ -1005,8 +1005,28 @@ export async function allocateConfirmedCollectionPostgres(
       promiseId,
       representativeScopeId,
     );
-    assertOpenPromise(lockedPromise);
     const collection = await lockCollection(transaction, input.collectionId);
+
+    const replayRows = await transaction.unsafe<AllocationRow[]>(
+      `${allocationSelect} WHERE allocation.idempotency_key = $1 FOR UPDATE`,
+      [context.idempotencyKey],
+    );
+    if (replayRows[0]) {
+      if (!sameAllocationInput(replayRows[0], promiseId, input)) {
+        throw new PromiseIdempotencyConflictError();
+      }
+      return Object.freeze({
+        promise: await requirePromiseById(
+          transaction,
+          promiseId,
+          representativeScopeId,
+        ),
+        allocation: mapAllocationRow(replayRows[0]),
+        replayed: true,
+      });
+    }
+
+    assertOpenPromise(lockedPromise);
     validateCollectionForPromise(lockedPromise, collection);
 
     const [promiseTotalRows, collectionTotalRows] = await Promise.all([

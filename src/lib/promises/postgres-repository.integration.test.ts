@@ -860,6 +860,117 @@ describe.sequential("PostgreSQL payment promises repository", () => {
     }
   });
 
+
+
+  it("يعيد تخصيص التحصيل المتزامن بالمفتاح نفسه دون سجلات إضافية", async () => {
+    const promise = await createPromisePostgres(
+      sql,
+      promiseInput({ promisedAmountMinor: 2_500 }),
+      context("contended-allocation-promise"),
+    );
+    const collectionId = await createConfirmedCollection(sql, {
+      amountMinor: 2_500,
+    });
+    const clientOne = isolatedClient();
+    const clientTwo = isolatedClient();
+    const key = "contended-allocation";
+    const input = { collectionId, amountMinor: 2_500 };
+    try {
+      const results = await Promise.all([
+        allocateConfirmedCollectionPostgres(
+          clientOne,
+          promise.promise.id,
+          input,
+          context(key),
+        ),
+        allocateConfirmedCollectionPostgres(
+          clientTwo,
+          promise.promise.id,
+          input,
+          context(key),
+        ),
+      ]);
+
+      expect(results.map((result) => result.replayed).sort()).toEqual([
+        false,
+        true,
+      ]);
+      expect(results[0]?.allocation.id).toBe(results[1]?.allocation.id);
+      expect(results[0]?.promise.baseStatus).toBe("FULFILLED");
+      expect(results[1]?.promise.baseStatus).toBe("FULFILLED");
+
+      const countRows = await sql<{
+        allocation_count: string;
+        allocated_event_count: string;
+        fulfilled_event_count: string;
+        audit_count: string;
+      }[]>`
+        SELECT
+          (
+            SELECT COUNT(*)::text
+            FROM payment_promise_allocations
+            WHERE promise_id = ${promise.promise.id}
+              AND collection_id = ${collectionId}
+          ) AS allocation_count,
+          (
+            SELECT COUNT(*)::text
+            FROM payment_promise_events
+            WHERE promise_id = ${promise.promise.id}
+              AND event_type = 'COLLECTION_ALLOCATED'
+              AND idempotency_key = ${`${runKey}-${key}`}
+          ) AS allocated_event_count,
+          (
+            SELECT COUNT(*)::text
+            FROM payment_promise_events
+            WHERE promise_id = ${promise.promise.id}
+              AND event_type = 'FULFILLED'
+          ) AS fulfilled_event_count,
+          (
+            SELECT COUNT(*)::text
+            FROM audit_logs
+            WHERE resource_type = 'PAYMENT_PROMISE'
+              AND resource_id = ${promise.promise.id}
+              AND action = 'promises.allocate_collection'
+          ) AS audit_count
+      `;
+      expect(countRows[0]).toEqual({
+        allocation_count: "1",
+        allocated_event_count: "1",
+        fulfilled_event_count: "1",
+        audit_count: "1",
+      });
+    } finally {
+      await Promise.all([clientOne.end(), clientTwo.end()]);
+    }
+  });
+
+  it("يرفض Payload مختلفًا لمفتاح تخصيص مستخدم سابقًا", async () => {
+    const promise = await createPromisePostgres(
+      sql,
+      promiseInput({ promisedAmountMinor: 3_000 }),
+      context("allocation-payload-conflict-promise"),
+    );
+    const collectionId = await createConfirmedCollection(sql, {
+      amountMinor: 3_000,
+    });
+    const key = "allocation-payload-conflict";
+    await allocateConfirmedCollectionPostgres(
+      sql,
+      promise.promise.id,
+      { collectionId, amountMinor: 3_000 },
+      context(key),
+    );
+
+    await expect(
+      allocateConfirmedCollectionPostgres(
+        sql,
+        promise.promise.id,
+        { collectionId, amountMinor: 2_999 },
+        context(key),
+      ),
+    ).rejects.toBeInstanceOf(PromiseIdempotencyConflictError);
+  });
+
   it("يمنع عكس التحصيل قبل عكس تخصيص الوعد ثم يسمح به بعد العكس", async () => {
     const promise = await createPromisePostgres(
       sql,

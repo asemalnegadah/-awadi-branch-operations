@@ -2,7 +2,7 @@
 
 **النطاق:** فرع العوادي في عدن فقط  
 **القرار المعماري:** ADR-0001  
-**Migrations:** `0016_payment_promises_engine.sql` و`0017_payment_promises_cursor_precision.sql` و`0018_payment_promises_review_hardening.sql` و`0019_payment_promises_idempotency_canonicalization.sql`
+**Migrations:** `0016_payment_promises_engine.sql` و`0017_payment_promises_cursor_precision.sql` و`0018_payment_promises_review_hardening.sql` و`0019_payment_promises_idempotency_canonicalization.sql` و`0020_payment_promises_safe_create_payload_backfill.sql`
 
 ## حدود الإصدار
 
@@ -48,6 +48,7 @@
 
 - الإنشاء والمتابعة والتخصيص والعكس والعمليات الحساسة تستخدم مفاتيح Idempotency فريدة.
 - يولّد Trigger PostgreSQL نسخة JSON غير قابلة للتعديل من طلب إنشاء الوعد داخل نفس INSERT، وتستخدم عند إعادة المحاولة بدل مقارنة صف الوعد القابل للتحديث.
+- تنفذ Migration 0020 Backfill آمنًا للحمولات القديمة بعد 0019 مع تعطيل محصور ومؤقت لتريجري الحماية والتحقق، ثم تعيد تفعليهما وتتحقق منهما داخل المعاملة نفسها.
 - تطبع قيمة `nextFollowUpAt` إلى UTC بصيغة milliseconds في كل من طلب التطبيق وPayload قاعدة البيانات، لذلك تعيد الطلبات ذات الإزاحات الزمنية النتيجة نفسها.
 - تُربط قيم الأحداث والتدقيق كـJSONB typed، وتُحسم مساواة إعادة الطلب داخل PostgreSQL باستخدام المقارنة canonical لـJSONB بدل مقارنة serialization في TypeScript.
 - إعادة الطلب المطابق تعيد النتيجة السابقة، وإعادة المفتاح بطلب مختلف ترفض بتعارض.

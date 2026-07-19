@@ -64,6 +64,46 @@ CREATE TRIGGER b_payment_promises_protect_create_payload
 BEFORE INSERT OR UPDATE OF create_payload ON payment_promises
 FOR EACH ROW EXECUTE FUNCTION protect_payment_promise_create_payload();
 
+-- Migration 0019 predates the safe backfill in 0020 and attempts to update the
+-- immutable payload while the general promise validator is active. Defer only
+-- that exact canonicalization write. PostgreSQL runs same-event triggers by name,
+-- so this narrowly scoped a_* trigger returns NULL before the b_* guard and the
+-- general validator. Migration 0020 removes this compatibility trigger, performs
+-- the real backfill transactionally, and restores all protection before commit.
+CREATE OR REPLACE FUNCTION defer_payment_promise_payload_canonicalization()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  migration_0019_payload jsonb;
+BEGIN
+  migration_0019_payload := jsonb_set(
+    OLD.create_payload,
+    '{nextFollowUpAt}',
+    CASE
+      WHEN OLD.next_follow_up_at IS NULL THEN 'null'::jsonb
+      ELSE to_jsonb(
+        to_char(
+          OLD.next_follow_up_at AT TIME ZONE 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+        )
+      )
+    END,
+    true
+  );
+
+  IF NEW.create_payload = migration_0019_payload THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER a_payment_promises_defer_payload_canonicalization
+BEFORE UPDATE OF create_payload ON payment_promises
+FOR EACH ROW EXECUTE FUNCTION defer_payment_promise_payload_canonicalization();
+
 -- A financially reversed collection may not remain allocated to a promise. The
 -- allocation reversal endpoint must run first so its append-only event and audit
 -- records are preserved and the promise is reopened transactionally.
