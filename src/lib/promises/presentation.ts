@@ -29,6 +29,11 @@ const eventLabels: Readonly<Record<PromiseEventType, string>> = Object.freeze({
   REOPENED: "إعادة فتح الوعد",
 });
 
+const moneyFormatter = new Intl.NumberFormat("ar-YE", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 export interface PromiseUiActions {
   readonly update: boolean;
   readonly followUp: boolean;
@@ -49,7 +54,7 @@ export function promiseEventLabel(eventType: PromiseEventType): string {
 }
 
 export function formatPromiseMoney(amountMinor: number, currency: "SR" | "RG"): string {
-  return `${new Intl.NumberFormat("ar-YE").format(amountMinor)} ${currency}`;
+  return `${moneyFormatter.format(amountMinor / 100)} ${currency}`;
 }
 
 export function promiseTemporalLabel(promise: PaymentPromise): string | null {
@@ -63,12 +68,13 @@ export function availablePromiseActions(
   promise: Pick<PaymentPromise, "baseStatus">,
 ): PromiseUiActions {
   const open = ["NEW", "UPCOMING", "PARTIALLY_FULFILLED"].includes(promise.baseStatus);
+  const terminalAllowed = ["NEW", "UPCOMING"].includes(promise.baseStatus);
   const has = (permission: PermissionCode): boolean => actor.permissions.has(permission);
   return Object.freeze({
     update: open && has("promises.update"),
     followUp: open && has("promises.follow_up"),
-    reject: open && has("promises.reject"),
-    cancel: open && has("promises.cancel"),
+    reject: terminalAllowed && has("promises.reject"),
+    cancel: terminalAllowed && has("promises.cancel"),
     allocate: open && has("promises.allocate_collection"),
     reverse: has("promises.reverse_allocation"),
     escalate: open && has("promises.escalate"),
