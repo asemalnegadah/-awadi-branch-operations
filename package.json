@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:migrations:upgrade": "bash scripts/test-payment-promises-upgrade.sh",
     "verify:migrations": "node scripts/verify-migrations.mjs",
     "verify:cloudflare": "node scripts/verify-cloudflare-config.mjs",
     "bootstrap:manager": "node scripts/bootstrap-manager.mjs",
