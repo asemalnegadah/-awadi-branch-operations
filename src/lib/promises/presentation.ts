@@ -57,6 +57,31 @@ export function formatPromiseMoney(amountMinor: number, currency: "SR" | "RG"): 
   return `${moneyFormatter.format(amountMinor / 100)} ${currency}`;
 }
 
+export function formatPromiseMinorForInput(amountMinor: number): string {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+    throw new Error("قيمة مالية غير صالحة.");
+  }
+  return (amountMinor / 100).toFixed(2);
+}
+
+export function parsePromiseMajorAmountToMinor(
+  value: FormDataEntryValue | string | number | null,
+): number {
+  const text = String(value ?? "").trim();
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(text);
+  if (!match) {
+    throw new Error("أدخل مبلغًا صحيحًا بمنزلتين عشريتين كحد أقصى.");
+  }
+
+  const whole = Number(match[1]);
+  const fraction = Number((match[2] ?? "").padEnd(2, "0"));
+  const amountMinor = whole * 100 + fraction;
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+    throw new Error("يجب أن يكون المبلغ أكبر من صفر وضمن الحد المسموح.");
+  }
+  return amountMinor;
+}
+
 export function promiseTemporalLabel(promise: PaymentPromise): string | null {
   if (promise.temporalStatus === "DUE_TODAY") return "مستحق اليوم";
   if (promise.temporalStatus === "OVERDUE") return "متأخر";
