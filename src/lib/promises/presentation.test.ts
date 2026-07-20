@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { AuthenticatedUser } from "@/lib/auth/types";
 
-import { availablePromiseActions, formatPromiseMoney, promiseStatusLabel } from "./presentation";
+import {
+  availablePromiseActions,
+  formatPromiseMinorForInput,
+  formatPromiseMoney,
+  parsePromiseMajorAmountToMinor,
+  promiseStatusLabel,
+} from "./presentation";
 
 function user(permissions: AuthenticatedUser["permissions"]): AuthenticatedUser {
   return {
@@ -56,6 +62,16 @@ describe("payment promises UI behavior", () => {
     }).format(15);
     expect(formatPromiseMoney(1500, "SR")).toBe(`${expected} SR`);
     expect(formatPromiseMoney(1500, "RG")).toBe(`${expected} RG`);
+    expect(formatPromiseMinorForInput(1500)).toBe("15.00");
     expect(promiseStatusLabel("PARTIALLY_FULFILLED")).toBe("منفذ جزئيًا");
+  });
+
+  it("يحوّل إدخال المستخدم بالوحدة الرئيسية إلى وحدات صغرى بدقة", () => {
+    expect(parsePromiseMajorAmountToMinor("15")).toBe(1500);
+    expect(parsePromiseMajorAmountToMinor("15.7")).toBe(1570);
+    expect(parsePromiseMajorAmountToMinor("15.07")).toBe(1507);
+    expect(parsePromiseMajorAmountToMinor("0.01")).toBe(1);
+    expect(() => parsePromiseMajorAmountToMinor("15.001")).toThrow();
+    expect(() => parsePromiseMajorAmountToMinor("0")).toThrow();
   });
 });
