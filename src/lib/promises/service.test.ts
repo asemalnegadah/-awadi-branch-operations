@@ -33,6 +33,9 @@ import {
   createPromise,
   getPromise,
   getPromiseDetails,
+  getPromiseFormOptions,
+  getPromiseUpdateFormOptions,
+  listAvailableConfirmedCollections,
   listPromises,
   reverseCollectionAllocation,
   updatePromise,
@@ -96,6 +99,28 @@ describe("payment promise service authorization", () => {
     expect(repository.createPromisePostgres).not.toHaveBeenCalled();
   });
 
+  it("يسمح بخيارات نموذج التعديل بصلاحية update دون create", async () => {
+    const options = { accounts: [], representatives: [] };
+    repository.getPromiseFormOptionsPostgres.mockResolvedValue(options);
+    const updateOnlyActor = actor(["promises.update"]);
+
+    await expect(
+      getPromiseUpdateFormOptions(
+        {} as never,
+        { actor: updateOnlyActor },
+      ),
+    ).resolves.toBe(options);
+
+    await expect(
+      getPromiseFormOptions(
+        {} as never,
+        { actor: updateOnlyActor },
+      ),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+
+    expect(repository.getPromiseFormOptionsPostgres).toHaveBeenCalledTimes(1);
+  });
+
   it("لا تمنح القراءة صلاحية تخصيص التحصيل", async () => {
     await expect(
       allocateConfirmedCollection(
@@ -140,6 +165,37 @@ describe("payment promise service authorization", () => {
         commandContext(["promises.reverse_allocation"]),
       ),
     ).resolves.toEqual({ reversed: true });
+  });
+
+  it("يستبعد التحصيل المرتبط فعليًا بالوعد من خيارات التخصيص", async () => {
+    const activeCollectionId = "10000000-0000-4000-8000-000000000020";
+    const reversedCollectionId = "10000000-0000-4000-8000-000000000021";
+    const unusedCollectionId = "10000000-0000-4000-8000-000000000022";
+    repository.getPromiseDetailsPostgres.mockResolvedValue({
+      promise: { id: promiseId },
+      events: [],
+      followUps: [],
+      allocations: [
+        { collectionId: activeCollectionId, reversedAt: null },
+        { collectionId: reversedCollectionId, reversedAt: "2026-07-20T00:00:00.000Z" },
+      ],
+    });
+    repository.listAvailableConfirmedCollectionsPostgres.mockResolvedValue([
+      { id: activeCollectionId },
+      { id: reversedCollectionId },
+      { id: unusedCollectionId },
+    ]);
+
+    const result = await listAvailableConfirmedCollections(
+      {} as never,
+      promiseId,
+      { actor: actor(["promises.allocate_collection"]) },
+    );
+
+    expect(result.map((collection) => collection.id)).toEqual([
+      reversedCollectionId,
+      unusedCollectionId,
+    ]);
   });
 
   it("يحجب سجل الأحداث عن مستخدم القراءة بلا view_history", async () => {
@@ -237,5 +293,4 @@ describe("payment promise service authorization", () => {
       ),
     ).rejects.toBeInstanceOf(AuthorizationError);
   });
-
 });
