@@ -39,9 +39,23 @@ describe("payment promises UI behavior", () => {
     expect(actions.update).toBe(false);
   });
 
-  it("يعرض العملات منفصلة دون تحويل أو جمع", () => {
-    expect(formatPromiseMoney(1500, "SR")).toContain("SR");
-    expect(formatPromiseMoney(1500, "RG")).toContain("RG");
+  it("يخفي الرفض والإلغاء بعد التنفيذ الجزئي", () => {
+    const actions = availablePromiseActions(
+      user(new Set(["promises.reject", "promises.cancel", "promises.reverse_allocation"])),
+      { baseStatus: "PARTIALLY_FULFILLED" },
+    );
+    expect(actions.reject).toBe(false);
+    expect(actions.cancel).toBe(false);
+    expect(actions.reverse).toBe(true);
+  });
+
+  it("يحوّل الوحدات الصغرى إلى قيمة مالية بمنزلتين عشريتين", () => {
+    const expected = new Intl.NumberFormat("ar-YE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(15);
+    expect(formatPromiseMoney(1500, "SR")).toBe(`${expected} SR`);
+    expect(formatPromiseMoney(1500, "RG")).toBe(`${expected} RG`);
     expect(promiseStatusLabel("PARTIALLY_FULFILLED")).toBe("منفذ جزئيًا");
   });
 });
