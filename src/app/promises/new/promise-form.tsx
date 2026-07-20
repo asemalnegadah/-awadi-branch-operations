@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type FormEvent } from "react";
 
+import { parsePromiseMajorAmountToMinor } from "@/lib/promises/presentation";
 import type { PromiseFormOptions } from "@/lib/promises/types";
 
 export function CreatePromiseForm({ options }: Readonly<{ options: PromiseFormOptions }>) {
@@ -24,7 +25,7 @@ export function CreatePromiseForm({ options }: Readonly<{ options: PromiseFormOp
           customerAccountId: accountId,
           representativeId: String(data.get("representativeId")),
           currencyCode: account?.currencyCode,
-          promisedAmountMinor: Number(data.get("promisedAmountMinor")),
+          promisedAmountMinor: parsePromiseMajorAmountToMinor(data.get("promisedAmount")),
           promiseDate: String(data.get("promiseDate")),
           dueDate: String(data.get("dueDate")),
           nextFollowUpAt: dateTimeOrNull(data.get("nextFollowUpAt")),
@@ -44,7 +45,7 @@ export function CreatePromiseForm({ options }: Readonly<{ options: PromiseFormOp
     <form className="promise-form promise-section" onSubmit={submit}>
       <div className="promise-field full-width"><label htmlFor="accountId">حساب العميل والعملة</label><select id="accountId" value={accountId} onChange={(event) => setAccountId(event.target.value)} required>{options.accounts.map((item) => <option key={item.id} value={item.id}>{item.customerName} — {item.customerNumber ?? "بلا رقم"} — {item.currencyCode}</option>)}</select></div>
       <div className="promise-field"><label htmlFor="representativeId">المندوب المسؤول</label><select id="representativeId" name="representativeId" required>{options.representatives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-      <div className="promise-field"><label htmlFor="promisedAmountMinor">المبلغ الموعود ({account?.currencyCode ?? ""})</label><input id="promisedAmountMinor" name="promisedAmountMinor" type="number" min="1" step="1" required /></div>
+      <div className="promise-field"><label htmlFor="promisedAmount">المبلغ الموعود ({account?.currencyCode ?? ""})</label><input id="promisedAmount" name="promisedAmount" type="number" min="0.01" step="0.01" inputMode="decimal" required /></div>
       <div className="promise-field"><label htmlFor="promiseDate">تاريخ الوعد</label><input id="promiseDate" name="promiseDate" type="date" required /></div>
       <div className="promise-field"><label htmlFor="dueDate">تاريخ الاستحقاق</label><input id="dueDate" name="dueDate" type="date" required /></div>
       <div className="promise-field full-width"><label htmlFor="nextFollowUpAt">المتابعة القادمة</label><input id="nextFollowUpAt" name="nextFollowUpAt" type="datetime-local" /></div>
