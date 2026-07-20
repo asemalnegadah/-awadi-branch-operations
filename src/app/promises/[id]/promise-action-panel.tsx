@@ -3,14 +3,18 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-import type { PromiseUiActions } from "@/lib/promises/presentation";
+import {
+  formatPromiseMinorForInput,
+  formatPromiseMoney,
+  parsePromiseMajorAmountToMinor,
+  type PromiseUiActions,
+} from "@/lib/promises/presentation";
 import type {
   ConfirmedCollectionOption,
   PaymentPromise,
   PaymentPromiseAllocation,
   PromiseFormRepresentativeOption,
 } from "@/lib/promises/types";
-import { formatPromiseMoney } from "@/lib/promises/presentation";
 
 interface Props {
   readonly promise: PaymentPromise;
@@ -55,10 +59,10 @@ export function PromiseActionPanel(props: Props) {
       {message ? <p className={message.includes("بنجاح") ? "status-pill fulfilled" : "form-error"} role="status">{message}</p> : null}
       <div className="promise-action-grid">
         {props.actions.update ? (
-          <form className="promise-action-form" onSubmit={(event) => submit(event, basePath, "PATCH", (data) => ({ version: props.promise.version, representativeId: String(data.get("representativeId")), promisedAmountMinor: Number(data.get("promisedAmountMinor")), dueDate: String(data.get("dueDate")), debtReason: String(data.get("debtReason")), delayReason: String(data.get("delayReason") ?? ""), notes: String(data.get("notes") ?? "") }))}>
+          <form className="promise-action-form" onSubmit={(event) => submit(event, basePath, "PATCH", (data) => ({ version: props.promise.version, representativeId: String(data.get("representativeId")), promisedAmountMinor: parsePromiseMajorAmountToMinor(data.get("promisedAmount")), dueDate: String(data.get("dueDate")), debtReason: String(data.get("debtReason")), delayReason: String(data.get("delayReason") ?? ""), notes: String(data.get("notes") ?? "") }))}>
             <h3>تحديث الوعد</h3>
             <div className="promise-field"><label>المندوب</label><select name="representativeId" defaultValue={props.promise.representativeId}>{props.representatives.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-            <div className="promise-field"><label>المبلغ الموعود</label><input name="promisedAmountMinor" type="number" min={Math.max(1, props.promise.fulfilledAmountMinor)} defaultValue={props.promise.promisedAmountMinor} required /></div>
+            <div className="promise-field"><label>المبلغ الموعود</label><input name="promisedAmount" type="number" min={formatPromiseMinorForInput(Math.max(1, props.promise.fulfilledAmountMinor))} step="0.01" inputMode="decimal" defaultValue={formatPromiseMinorForInput(props.promise.promisedAmountMinor)} required /></div>
             <div className="promise-field"><label>تاريخ الاستحقاق</label><input name="dueDate" type="date" defaultValue={props.promise.dueDate} required /></div>
             <div className="promise-field"><label>سبب الدين</label><textarea name="debtReason" defaultValue={props.promise.debtReason} required /></div>
             <div className="promise-field"><label>سبب التأخير</label><textarea name="delayReason" defaultValue={props.promise.delayReason ?? ""} /></div>
@@ -74,9 +78,9 @@ export function PromiseActionPanel(props: Props) {
         ) : null}
 
         {props.actions.allocate ? (
-          <form className="promise-action-form" onSubmit={(event) => submit(event, `${basePath}/allocations`, "POST", (data) => ({ collectionId: String(data.get("collectionId")), amountMinor: Number(data.get("amountMinor")) }))}>
+          <form className="promise-action-form" onSubmit={(event) => submit(event, `${basePath}/allocations`, "POST", (data) => ({ collectionId: String(data.get("collectionId")), amountMinor: parsePromiseMajorAmountToMinor(data.get("amount")) }))}>
             <h3>ربط تحصيل مؤكد</h3>
-            {props.collections.length === 0 ? <p>لا توجد تحصيلات مؤكدة متاحة لهذا العميل والعملة.</p> : <><div className="promise-field"><label>التحصيل</label><select name="collectionId" required>{props.collections.map((item) => <option key={item.id} value={item.id}>{item.receiptNumber ?? item.id} — {formatPromiseMoney(item.availableAmountMinor, item.currencyCode)} متاح</option>)}</select></div><div className="promise-field"><label>مبلغ الربط</label><input name="amountMinor" type="number" min="1" max={props.promise.remainingAmountMinor} required /></div><button className="primary-button" disabled={busy}>ربط التحصيل</button></>}
+            {props.collections.length === 0 ? <p>لا توجد تحصيلات مؤكدة متاحة لهذا العميل والعملة.</p> : <><div className="promise-field"><label>التحصيل</label><select name="collectionId" required>{props.collections.map((item) => <option key={item.id} value={item.id}>{item.receiptNumber ?? item.id} — {formatPromiseMoney(item.availableAmountMinor, item.currencyCode)} متاح</option>)}</select></div><div className="promise-field"><label>مبلغ الربط</label><input name="amount" type="number" min="0.01" step="0.01" inputMode="decimal" max={formatPromiseMinorForInput(props.promise.remainingAmountMinor)} required /></div><button className="primary-button" disabled={busy}>ربط التحصيل</button></>}
           </form>
         ) : null}
 
