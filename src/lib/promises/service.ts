@@ -333,11 +333,15 @@ export async function getPromiseDashboardSummary(sql: Sql, context: PromiseReadC
 
 export async function getPromiseFormOptions(sql: Sql, context: PromiseReadContext) {
   requirePromisePermission(context.actor, "promises.create");
-  const representativeScopeId = await resolveRepresentativeScope(
-    sql,
-    context.actor,
-  );
-  return getPromiseFormOptionsPostgres(sql, representativeScopeId);
+  return loadPromiseFormOptions(sql, context);
+}
+
+export async function getPromiseUpdateFormOptions(
+  sql: Sql,
+  context: PromiseReadContext,
+) {
+  requirePromisePermission(context.actor, "promises.update");
+  return loadPromiseFormOptions(sql, context);
 }
 
 export async function listAvailableConfirmedCollections(
@@ -350,13 +354,38 @@ export async function listAvailableConfirmedCollections(
     sql,
     context.actor,
   );
-  const promise = await getPromisePostgres(sql, promiseId, representativeScopeId);
-  if (!promise) throw new PromiseNotFoundError();
-  return listAvailableConfirmedCollectionsPostgres(
+  const details = await getPromiseDetailsPostgres(
     sql,
     promiseId,
     representativeScopeId,
   );
+  if (!details) throw new PromiseNotFoundError();
+
+  const collections = await listAvailableConfirmedCollectionsPostgres(
+    sql,
+    promiseId,
+    representativeScopeId,
+  );
+  const activeCollectionIds = new Set(
+    details.allocations
+      .filter((allocation) => allocation.reversedAt === null)
+      .map((allocation) => allocation.collectionId),
+  );
+
+  return Object.freeze(
+    collections.filter((collection) => !activeCollectionIds.has(collection.id)),
+  );
+}
+
+async function loadPromiseFormOptions(
+  sql: Sql,
+  context: PromiseReadContext,
+) {
+  const representativeScopeId = await resolveRepresentativeScope(
+    sql,
+    context.actor,
+  );
+  return getPromiseFormOptionsPostgres(sql, representativeScopeId);
 }
 
 function requirePromisePermission(
