@@ -13,7 +13,7 @@ import {
 } from "@/lib/promises/presentation";
 import {
   getPromiseDetails,
-  getPromiseFormOptions,
+  getPromiseUpdateFormOptions,
   listAvailableConfirmedCollections,
 } from "@/lib/promises/service";
 import { parsePromiseId } from "@/lib/promises/validation";
@@ -40,7 +40,9 @@ export default async function PromiseDetailsPage({ params }: PageContext) {
 
   const actions = availablePromiseActions(session.user, details.promise);
   const [formOptions, collections] = await Promise.all([
-    actions.update ? getPromiseFormOptions(db, { actor: session.user }) : Promise.resolve(null),
+    actions.update
+      ? getPromiseUpdateFormOptions(db, { actor: session.user })
+      : Promise.resolve(null),
     actions.allocate
       ? listAvailableConfirmedCollections(db, id, { actor: session.user })
       : Promise.resolve([]),
