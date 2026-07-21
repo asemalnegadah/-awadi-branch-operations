@@ -32,6 +32,7 @@ export const permissionCodes = [
   "credit_exceptions.propose",
   "credit_exceptions.approve",
   "credit_exceptions.revoke",
+  "credit_exceptions.consume",
   "plans.read_own",
   "plans.manage",
   "plans.approve",
