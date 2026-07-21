@@ -5,6 +5,7 @@ import type { PermissionCode } from "@/lib/auth/permissions";
 import { AuthorizationError } from "@/lib/auth/types";
 import { getActiveRepresentativeIdByUserPostgres } from "@/lib/promises/postgres-repository";
 
+import { listFieldVisitsStablePostgres } from "./postgres-list-repository";
 import {
   addFieldVisitEvidencePostgres,
   addFieldVisitOutcomePostgres,
@@ -13,7 +14,6 @@ import {
   checkOutFieldVisitPostgres,
   createFieldVisitPostgres,
   getFieldVisitDetailsPostgres,
-  listFieldVisitsPostgres,
   recordDailyPlanItemResultPostgres,
   returnFieldVisitPostgres,
   verifyFieldVisitPostgres,
@@ -45,7 +45,7 @@ export async function listFieldVisits(
   ) {
     throw new AuthorizationError();
   }
-  return listFieldVisitsPostgres(sql, filters, representativeScopeId);
+  return listFieldVisitsStablePostgres(sql, filters, representativeScopeId);
 }
 
 export async function getFieldVisitDetails(
