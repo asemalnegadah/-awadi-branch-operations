@@ -15,9 +15,10 @@ export const dynamic = "force-dynamic";
 
 const nextModules = [
   "مطابقة الحسابات والفوارق",
-  "الخطط اليومية والزيارات",
   "تسليم النقدية والإغلاق اليومي",
-  "التقارير التشغيلية الأساسية",
+  "المخزون والتشغيلات والانتهاء",
+  "المركبات والوقود والصيانة",
+  "التقارير والتنبيهات التشغيلية",
 ];
 
 export default async function DashboardPage() {
@@ -89,6 +90,22 @@ export default async function DashboardPage() {
             <h2>المخاطر والمنع الائتماني</h2>
             <p>تقييم قابل للتفسير لكل حساب وعملة، وقرارات منع واستثناءات باعتماد وتدقيق.</p>
             <Link className="primary-button button-link" href="/risk">فتح وحدة المخاطر</Link>
+          </article>
+        ) : null}
+
+        {session.user.permissions.has("plans.read_own") ? (
+          <article className="panel">
+            <h2>الخطط اليومية</h2>
+            <p>خطط حتمية بأهداف تحصيل وبيع منفصلة لـSR وRG ومسارات اعتماد وتنفيذ موثقة.</p>
+            <Link className="primary-button button-link" href="/plans">فتح وحدة الخطط</Link>
+          </article>
+        ) : null}
+
+        {session.user.permissions.has("visits.read_own") ? (
+          <article className="panel">
+            <h2>الزيارات الميدانية</h2>
+            <p>تسجيل الوصول والمغادرة والنتائج والأدلة وربطها بعناصر الخطة والتحقق الإداري.</p>
+            <Link className="primary-button button-link" href="/visits">فتح وحدة الزيارات</Link>
           </article>
         ) : null}
       </section>
