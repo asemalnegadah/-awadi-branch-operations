@@ -15,6 +15,7 @@ import {
   formatCreditMoney,
 } from "@/lib/risk/presentation";
 import { getCreditRiskAccountDetails } from "@/lib/risk/service";
+import { listCreditExceptionUsages } from "@/lib/risk/usage-service";
 import { parseRiskId } from "@/lib/risk/validation";
 
 import { RiskActionPanel } from "./risk-action-panel";
@@ -28,11 +29,15 @@ export default async function CreditRiskDetailsPage({ params }: RouteContext) {
   if (session.user.mustChangePassword) redirect("/settings/security");
   requirePermission(session.user, "risk.read");
   const { accountId } = await params;
-  const details = await getCreditRiskAccountDetails(
-    getDatabaseClient(),
-    parseRiskId(accountId),
-    { actor: session.user },
-  );
+  const parsedAccountId = parseRiskId(accountId);
+  const context = { actor: session.user } as const;
+  const canViewHistory = session.user.permissions.has("risk.view_history");
+  const [details, usages] = await Promise.all([
+    getCreditRiskAccountDetails(getDatabaseClient(), parsedAccountId, context),
+    canViewHistory
+      ? listCreditExceptionUsages(getDatabaseClient(), parsedAccountId, context)
+      : Promise.resolve(Object.freeze([])),
+  ]);
 
   const restriction = details.restrictions.find((item) =>
     ["DRAFT", "PENDING_APPROVAL", "ACTIVE"].includes(item.state),
@@ -139,7 +144,7 @@ export default async function CreditRiskDetailsPage({ params }: RouteContext) {
         actions={actions}
       />
 
-      {session.user.permissions.has("risk.view_history") ? (
+      {canViewHistory ? (
         <>
           <section className="panel promise-section">
             <h2>تاريخ التقييمات</h2>
@@ -151,6 +156,12 @@ export default async function CreditRiskDetailsPage({ params }: RouteContext) {
             <h2>تاريخ قرارات المنع والاستثناءات</h2>
             {[...details.restrictionEvents, ...details.exceptionEvents].length === 0 ? <p>لا توجد أحداث.</p> : (
               <div className="promise-table-wrap"><table className="promise-table"><thead><tr><th>الوقت</th><th>الحدث</th><th>المنفذ</th><th>السبب</th></tr></thead><tbody>{[...details.restrictionEvents, ...details.exceptionEvents].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt)).map((event) => <tr key={event.id}><td>{event.occurredAt}</td><td>{event.eventType}</td><td>{event.actorName}</td><td>{event.reason ?? "—"}</td></tr>)}</tbody></table></div>
+            )}
+          </section>
+          <section className="panel promise-section">
+            <h2>استهلاك الاستثناءات</h2>
+            {usages.length === 0 ? <p>لم يستخدم أي استثناء لهذا الحساب.</p> : (
+              <div className="promise-table-wrap"><table className="promise-table"><thead><tr><th>الوقت</th><th>الحركة</th><th>المبلغ</th><th>المصدر</th><th>المنفذ</th><th>السبب</th></tr></thead><tbody>{usages.map((usage) => <tr key={usage.id}><td>{usage.occurredAt}</td><td>{usage.direction === "CONSUME" ? "استهلاك" : "عكس"}</td><td>{formatCreditMoney(usage.amountMinor, usage.currencyCode)}</td><td>{usage.sourceType} / {usage.sourceId}</td><td>{usage.actorName}</td><td>{usage.reason ?? "—"}</td></tr>)}</tbody></table></div>
             )}
           </section>
         </>
