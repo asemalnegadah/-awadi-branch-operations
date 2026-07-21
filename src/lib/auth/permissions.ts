@@ -38,6 +38,7 @@ export const permissionCodes = [
   "plans.generate",
   "plans.manage",
   "plans.approve",
+  "plans.execute",
   "plans.view_history",
   "reports.read",
   "reports.export",
