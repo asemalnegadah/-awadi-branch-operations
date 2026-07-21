@@ -1,7 +1,9 @@
 name: Field visits SQL diagnostic
 
 on:
-  pull_request:
+  push:
+    branches:
+      - feature/field-visits-engine
     paths:
       - db/migrations/**
       - db/tests/**
@@ -11,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: field-visits-sql-diagnostic-${{ github.ref }}
+  group: field-visits-sql-diagnostic
   cancel-in-progress: true
 
 jobs:
