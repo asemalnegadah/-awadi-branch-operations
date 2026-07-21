@@ -16,9 +16,9 @@ import {
   listFieldVisitsPostgres,
   recordDailyPlanItemResultPostgres,
   returnFieldVisitPostgres,
-  submitFieldVisitPostgres,
   verifyFieldVisitPostgres,
 } from "./postgres-repository";
+import { submitFieldVisitSafelyPostgres } from "./postgres-submit-repository";
 import type {
   AddFieldVisitEvidenceInput,
   AddFieldVisitOutcomeInput,
@@ -142,7 +142,7 @@ export async function submitFieldVisit(
   context: FieldVisitCommandContext,
 ) {
   requireVisitPermission(context, "visits.manage");
-  return submitFieldVisitPostgres(
+  return submitFieldVisitSafelyPostgres(
     sql,
     visitId,
     input,
