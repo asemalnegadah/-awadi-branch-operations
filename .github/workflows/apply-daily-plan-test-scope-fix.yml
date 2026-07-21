@@ -1,0 +1,48 @@
+name: Apply daily plan fixture scope fix
+
+on:
+  push:
+    branches:
+      - feature/daily-plans-engine
+    paths:
+      - .github/workflows/apply-daily-plan-test-scope-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/daily-plans-engine
+          fetch-depth: 0
+      - name: Patch fixture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('db/tests/0027_daily_plans_derived_totals_and_priorities_smoke.sql')
+          text = path.read_text(encoding='utf-8')
+          old = """    UPDATE customer_rep_assignments
+    SET valid_until = now() - interval '1 minute'
+    WHERE customer_id = customer_one_id
+      AND representative_id = representative_id_value;
+"""
+          new = """    UPDATE customer_rep_assignments
+    SET valid_from = now() + interval '1 day',
+        valid_until = NULL
+    WHERE customer_id = customer_one_id
+      AND representative_id = representative_id_value;
+"""
+          if old not in text:
+              raise SystemExit('target fixture block not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Commit fixture fix
+        run: |
+          git config user.name "awadi-ci-bot"
+          git config user.email "awadi-ci-bot@users.noreply.github.com"
+          git add db/tests/0027_daily_plans_derived_totals_and_priorities_smoke.sql
+          git commit -m "test: make daily plan scope fixture valid"
+          git push origin HEAD:feature/daily-plans-engine
