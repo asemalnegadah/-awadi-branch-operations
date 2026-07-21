@@ -8,7 +8,7 @@ import {
   readCreditRiskJson,
   riskJson,
 } from "@/lib/risk/api";
-import { evaluateCreditSale } from "@/lib/risk/service";
+import { evaluateCreditSaleWithUsage } from "@/lib/risk/usage-service";
 
 export const runtime = "nodejs";
 
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   if (!authorization.ok) return authorization.response;
   try {
     const input = schema.parse(await readCreditRiskJson(request));
-    const data = await evaluateCreditSale(
+    const data = await evaluateCreditSaleWithUsage(
       getDatabaseClient(),
       input.customerAccountId,
       input.amountMinor,
