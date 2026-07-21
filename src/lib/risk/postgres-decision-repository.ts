@@ -1031,7 +1031,7 @@ async function insertDecisionAudit(
       ) VALUES (
         $1, 'USER', $2, $3, $4, $5, $6, $7::inet, $8, $9,
         $10::jsonb, $11::jsonb, 'SUCCESS',
-        jsonb_build_object('operating_mode', $12)
+        jsonb_build_object('operating_mode', $12::text)
       )
     `,
     [

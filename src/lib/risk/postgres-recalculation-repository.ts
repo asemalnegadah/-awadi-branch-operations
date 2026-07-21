@@ -230,9 +230,9 @@ async function insertAudit(
         $1, 'USER', 'risk.recalculate', 'CREDIT_RISK_ASSESSMENT', $2,
         $3, $4, $5::inet, $6, $7::jsonb, 'SUCCESS',
         jsonb_build_object(
-          'ruleset_version', $8,
-          'currency_code', $9,
-          'operating_mode', $10
+          'ruleset_version', $8::text,
+          'currency_code', $9::text,
+          'operating_mode', $10::text
         )
       )
     `,
