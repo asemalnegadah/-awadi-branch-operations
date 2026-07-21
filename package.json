@@ -44,7 +44,7 @@
     "eslint": "9.39.0",
     "eslint-config-next": "16.2.10",
     "typescript": "5.9.3",
-    "vitest": "4.1.9",
-    "wrangler": "4.110.0"
+    "vitest": "4.1.10",
+    "wrangler": "4.112.0"
   }
 }
