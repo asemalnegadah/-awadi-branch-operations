@@ -4,6 +4,7 @@ DO $$
 DECLARE
   manager_id uuid;
   second_actor_id uuid;
+  branch_manager_role_id uuid;
   customer_id_value uuid;
   account_id_value uuid;
   assessment_id_value uuid;
@@ -21,6 +22,14 @@ BEGIN
   INSERT INTO users (email, full_name, status)
   VALUES ('credit.history.other@example.test', 'مستخدم آخر لحماية التاريخ', 'ACTIVE')
   RETURNING id INTO second_actor_id;
+
+  SELECT id INTO branch_manager_role_id FROM roles WHERE code = 'BRANCH_MANAGER';
+  IF branch_manager_role_id IS NULL THEN
+    RAISE EXCEPTION 'BRANCH_MANAGER role is missing';
+  END IF;
+
+  INSERT INTO user_roles (user_id, role_id, granted_by)
+  VALUES (manager_id, branch_manager_role_id, manager_id);
 
   INSERT INTO customers (
     customer_number,
