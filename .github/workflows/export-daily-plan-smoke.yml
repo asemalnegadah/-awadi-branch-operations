@@ -1,0 +1,24 @@
+name: Export daily plan smoke fixture
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/export-daily-plan-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          show-progress: false
+      - uses: actions/upload-artifact@v7
+        with:
+          name: daily-plan-smoke-source
+          path: db/tests/0026_daily_plans_engine_smoke.sql
+          retention-days: 1
