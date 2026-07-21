@@ -1,9 +1,7 @@
 name: Field visits SQL diagnostic
 
 on:
-  push:
-    branches:
-      - feature/field-visits-engine
+  pull_request:
     paths:
       - db/migrations/**
       - db/tests/0030_field_visits_engine_smoke.sql
@@ -13,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: field-visits-sql-diagnostic
+  group: field-visits-sql-diagnostic-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
