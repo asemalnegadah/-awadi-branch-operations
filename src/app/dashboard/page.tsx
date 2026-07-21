@@ -14,10 +14,10 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 const nextModules = [
-  "رفع ومراجعة كشوف Onyx",
-  "مطابقة العملاء والعملات",
-  "محرك المخاطر",
+  "مطابقة الحسابات والفوارق",
   "الخطط اليومية والزيارات",
+  "تسليم النقدية والإغلاق اليومي",
+  "التقارير التشغيلية الأساسية",
 ];
 
 export default async function DashboardPage() {
@@ -49,12 +49,12 @@ export default async function DashboardPage() {
       <section className="grid dashboard-grid" aria-label="حالة الحساب">
         <article className="card">
           <span className="card-label">وضع التشغيل</span>
-          <strong>مدير فرع واحد</strong>
+          <strong>{session.user.operatingMode === "SINGLE_MANAGER" ? "مدير فرع واحد" : "فصل المهام"}</strong>
           <small>{session.user.operatingMode}</small>
         </article>
         <article className="card">
-          <span className="card-label">الدور</span>
-          <strong>مدير فرع عدن</strong>
+          <span className="card-label">الأدوار</span>
+          <strong>{session.user.roles.length}</strong>
           <small>{session.user.roles.join("، ")}</small>
         </article>
         <article className="card">
@@ -75,19 +75,29 @@ export default async function DashboardPage() {
         </article>
       </section>
 
-      {session.user.permissions.has("promises.read") ? (
-        <section className="panel">
-          <h2>وعود السداد</h2>
-          <p>متابعة الوعود والاستحقاقات وربط التحصيلات المؤكدة مع فصل العملات.</p>
-          <Link className="primary-button button-link" href="/promises">فتح وحدة الوعود</Link>
-        </section>
-      ) : null}
+      <section className="grid">
+        {session.user.permissions.has("promises.read") ? (
+          <article className="panel">
+            <h2>وعود السداد</h2>
+            <p>متابعة الوعود والاستحقاقات وربط التحصيلات المؤكدة مع فصل العملات.</p>
+            <Link className="primary-button button-link" href="/promises">فتح وحدة الوعود</Link>
+          </article>
+        ) : null}
+
+        {session.user.permissions.has("risk.read") ? (
+          <article className="panel">
+            <h2>المخاطر والمنع الائتماني</h2>
+            <p>تقييم قابل للتفسير لكل حساب وعملة، وقرارات منع واستثناءات باعتماد وتدقيق.</p>
+            <Link className="primary-button button-link" href="/risk">فتح وحدة المخاطر</Link>
+          </article>
+        ) : null}
+      </section>
 
       <section className="panel">
-        <h2>حالة الوحدات التالية</h2>
+        <h2>الوحدات قيد الاستكمال</h2>
         <p>
-          تم تجهيز أساس الدخول والجلسات وصلاحيات مدير الفرع. الوحدات التالية
-          ستظهر تدريجيًا بعد اكتمال كل دفعة واختبارها.
+          يستمر البناء كوحدات تشغيلية كاملة تشمل قاعدة البيانات والصلاحيات والـAPI
+          والواجهة والاختبارات قبل دمج كل دفعة.
         </p>
         <ul className="module-list">
           {nextModules.map((module) => (
@@ -98,7 +108,7 @@ export default async function DashboardPage() {
 
       <footer>
         <span>{session.user.email}</span>
-        <span>لا توجد بيانات تشغيلية حقيقية في هذه الدفعة</span>
+        <span>فرع عدن فقط — العملات مستقلة — وقت الخادم معتمد</span>
       </footer>
     </main>
   );
