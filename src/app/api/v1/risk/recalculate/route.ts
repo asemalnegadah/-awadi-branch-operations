@@ -8,7 +8,7 @@ import {
   readCreditRiskJson,
   riskJson,
 } from "@/lib/risk/api";
-import { recalculateCreditRisk } from "@/lib/risk/service";
+import { recalculateCreditRiskSafely } from "@/lib/risk/recalculation-service";
 import { parseRecalculateCreditRiskInput } from "@/lib/risk/validation";
 
 export const runtime = "nodejs";
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
   const authorization = await authorizeCreditRiskApiRequest(request, "risk.recalculate", true);
   if (!authorization.ok) return authorization.response;
   try {
-    const result = await recalculateCreditRisk(
+    const result = await recalculateCreditRiskSafely(
       getDatabaseClient(),
       parseRecalculateCreditRiskInput(await readCreditRiskJson(request)),
       buildCreditRiskCommandContext(authorization, request),
