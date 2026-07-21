@@ -1,0 +1,111 @@
+name: Generate visits repository hardening
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/generate-visits-repository-hardening.yml
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          show-progress: false
+      - name: Patch repository
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/lib/visits/postgres-repository.ts')
+          text = path.read_text()
+          import_marker = 'import {\n  FieldVisitBusinessRuleError,'
+          if 'from "./cursor"' not in text:
+              text = text.replace(import_marker, 'import { decodeFieldVisitCursor, encodeFieldVisitCursor } from "./cursor";\nimport {\n  FieldVisitBusinessRuleError,', 1)
+
+          start = text.index('export async function listFieldVisitsPostgres(')
+          end = text.index('export async function getFieldVisitPostgres(', start)
+          replacement = '''export async function listFieldVisitsPostgres(
+  sql: Sql,
+  filters: FieldVisitListFilters,
+  representativeScopeId?: string,
+): Promise<FieldVisitPage> {
+  const cursor = decodeFieldVisitCursor(filters.cursor);
+  const rows = await sql.unsafe<VisitRow[]>(
+    `${visitSelect}
+     WHERE ($1::uuid IS NULL OR visit.representative_id = $1::uuid)
+       AND ($2::uuid IS NULL OR visit.representative_id = $2::uuid)
+       AND ($3::uuid IS NULL OR visit.customer_id = $3::uuid)
+       AND ($4::text IS NULL OR visit.state = $4)
+       AND ($5::date IS NULL OR COALESCE(visit.arrived_at, visit.created_at)::date >= $5::date)
+       AND ($6::date IS NULL OR COALESCE(visit.arrived_at, visit.created_at)::date <= $6::date)
+       AND (
+         $7::timestamptz IS NULL
+         OR visit.created_at < $7::timestamptz
+         OR (visit.created_at = $7::timestamptz AND visit.id < $8::uuid)
+       )
+     ORDER BY visit.created_at DESC, visit.id DESC
+     LIMIT $9`,
+    [
+      representativeScopeId ?? null,
+      filters.representativeId ?? null,
+      filters.customerId ?? null,
+      filters.state ?? null,
+      filters.visitDateFrom ?? null,
+      filters.visitDateTo ?? null,
+      cursor?.createdAt ?? null,
+      cursor?.id ?? null,
+      filters.limit + 1,
+    ],
+  );
+  const hasMore = rows.length > filters.limit;
+  const selected = hasMore ? rows.slice(0, filters.limit) : rows;
+  const last = selected.at(-1);
+  return Object.freeze({
+    items: Object.freeze(selected.map(mapVisitRow)),
+    nextCursor: hasMore && last
+      ? encodeFieldVisitCursor({ createdAt: iso(last.created_at), id: last.id })
+      : null,
+  });
+}
+
+'''
+          text = text[:start] + replacement + text[end:]
+
+          submit_start = text.index('export async function submitFieldVisitPostgres(')
+          submit_end = text.index('export async function verifyFieldVisitPostgres(', submit_start)
+          text = text[:submit_start] + text[submit_end:]
+          text = text.replace(
+            'eventType: "CHECKED_IN" | "CHECKED_OUT" | "SUBMITTED" | "VERIFIED" | "RETURNED" | "CANCELLED",',
+            'eventType: "CHECKED_IN" | "CHECKED_OUT" | "VERIFIED" | "RETURNED" | "CANCELLED",',
+          )
+          path.write_text(text)
+          PY
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Validate generated repository
+        id: validation
+        run: |
+          set +e
+          npm run typecheck -- --pretty false > visits-repository-typecheck.log 2>&1
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: visits-repository-hardened-source
+          path: |
+            src/lib/visits/postgres-repository.ts
+            visits-repository-typecheck.log
+          retention-days: 1
+      - name: Enforce typecheck
+        run: test "${{ steps.validation.outputs.code }}" = "0"
