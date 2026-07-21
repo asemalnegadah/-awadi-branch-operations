@@ -4,6 +4,7 @@ import { requirePermission } from "@/lib/auth/authorization";
 import { AuthorizationError } from "@/lib/auth/types";
 import { getActiveRepresentativeIdByUserPostgres } from "@/lib/promises/postgres-repository";
 
+import { deriveCreditRiskInputPostgres } from "./postgres-assessment-repository";
 import { recalculateCreditRiskIdempotentPostgres } from "./postgres-recalculation-repository";
 import type {
   CreditRiskCommandContext,
@@ -17,11 +18,20 @@ export async function recalculateCreditRiskSafely(
   context: CreditRiskCommandContext,
 ) {
   requirePermission(context.actor, "risk.recalculate");
+  const representativeScopeId = await resolveRepresentativeScope(sql, context);
+
+  // Enforce record scope before any idempotent replay can reveal an existing assessment.
+  await deriveCreditRiskInputPostgres(
+    sql,
+    input.customerAccountId,
+    representativeScopeId,
+  );
+
   return recalculateCreditRiskIdempotentPostgres(
     sql,
     input.customerAccountId,
     context,
-    await resolveRepresentativeScope(sql, context),
+    representativeScopeId,
   );
 }
 
