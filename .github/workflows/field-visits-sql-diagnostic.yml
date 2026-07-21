@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - db/migrations/**
-      - db/tests/0030_field_visits_engine_smoke.sql
+      - db/tests/**
       - .github/workflows/field-visits-sql-diagnostic.yml
 
 permissions:
@@ -49,7 +49,12 @@ jobs:
           while IFS= read -r migration; do
             psql --quiet --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "$migration" >/dev/null
           done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
-      - name: Run field visits smoke test
+      - name: Run all PostgreSQL integrity tests concisely
         env:
           PGPASSWORD: postgres
-        run: psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file db/tests/0030_field_visits_engine_smoke.sql
+        run: |
+          set -euo pipefail
+          while IFS= read -r test_file; do
+            echo "TEST ${test_file}"
+            psql --quiet --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "$test_file"
+          done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
