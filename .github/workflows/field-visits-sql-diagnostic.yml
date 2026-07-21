@@ -17,7 +17,7 @@ concurrency:
 jobs:
   diagnose:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 8
     services:
       postgres:
         image: postgres:16-alpine
@@ -37,24 +37,15 @@ jobs:
         with:
           show-progress: false
           persist-credentials: false
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --yes --quiet postgresql-client
-      - name: Apply migrations quietly
-        env:
-          PGPASSWORD: postgres
+      - name: Run migrations and PostgreSQL tests in service container
         run: |
           set -euo pipefail
+          container_id="$(docker ps --filter ancestor=postgres:16-alpine --format '{{.ID}}' | head -n 1)"
+          test -n "$container_id"
           while IFS= read -r migration; do
-            psql --quiet --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "$migration" >/dev/null
+            docker exec -i "$container_id" psql --quiet --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 < "$migration" >/dev/null
           done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
-      - name: Run all PostgreSQL integrity tests concisely
-        env:
-          PGPASSWORD: postgres
-        run: |
-          set -euo pipefail
           while IFS= read -r test_file; do
             echo "TEST ${test_file}"
-            psql --quiet --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "$test_file"
+            docker exec -i "$container_id" psql --quiet --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 < "$test_file"
           done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
