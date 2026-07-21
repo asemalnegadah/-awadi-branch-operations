@@ -1,0 +1,57 @@
+name: Field visits SQL diagnostic
+
+on:
+  push:
+    branches:
+      - feature/field-visits-engine
+    paths:
+      - db/migrations/**
+      - db/tests/0030_field_visits_engine_smoke.sql
+      - .github/workflows/field-visits-sql-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: field-visits-sql-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: awadi_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d awadi_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          persist-credentials: false
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --quiet postgresql-client
+      - name: Apply migrations quietly
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          while IFS= read -r migration; do
+            psql --quiet --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "$migration" >/dev/null
+          done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
+      - name: Run field visits smoke test
+        env:
+          PGPASSWORD: postgres
+        run: psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file db/tests/0030_field_visits_engine_smoke.sql
