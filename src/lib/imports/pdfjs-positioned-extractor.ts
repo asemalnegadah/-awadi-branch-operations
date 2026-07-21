@@ -53,7 +53,6 @@ export async function extractPositionedTextWithPdfJs(
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const loadingTask = pdfjs.getDocument({
     data: bytes.slice(),
-    isEvalSupported: false,
     useSystemFonts: true,
     stopAtErrors: false,
   });
@@ -178,11 +177,9 @@ export async function extractPositionedTextWithPdfJs(
       { cause: error },
     );
   } finally {
-    if (pdf) {
-      await pdf.destroy();
-    } else {
-      await loadingTask.destroy();
-    }
+    // PDF.js 6 owns document and worker teardown through the loading task.
+    // Always destroying the task also covers failures before a proxy is created.
+    await loadingTask.destroy();
   }
 }
 
