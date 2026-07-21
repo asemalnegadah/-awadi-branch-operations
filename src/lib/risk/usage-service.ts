@@ -4,9 +4,9 @@ import { requirePermission } from "@/lib/auth/authorization";
 import { AuthorizationError } from "@/lib/auth/types";
 import { getActiveRepresentativeIdByUserPostgres } from "@/lib/promises/postgres-repository";
 
+import { authorizeCreditSalePostgres } from "./postgres-credit-authorization-repository";
 import {
   consumeCreditExceptionPostgres,
-  evaluateCreditSaleWithUsagePostgres,
   listCreditExceptionUsagesPostgres,
   reverseCreditExceptionUsagePostgres,
 } from "./postgres-usage-repository";
@@ -64,7 +64,7 @@ export async function evaluateCreditSaleWithUsage(
   context: CreditRiskReadContext,
 ) {
   requirePermission(context.actor, "risk.read");
-  return evaluateCreditSaleWithUsagePostgres(
+  return authorizeCreditSalePostgres(
     sql,
     customerAccountId,
     amountMinor,
