@@ -389,6 +389,22 @@ BEGIN
       started_at = now()
   WHERE id = plan_id_value;
 
+  INSERT INTO daily_plan_item_results (
+    plan_item_id,
+    result_type,
+    reason,
+    recorded_by,
+    request_id,
+    idempotency_key
+  ) VALUES (
+    item_id_value,
+    'SKIPPED',
+    'نتيجة تنفيذ موثقة لاختبار دورة الخطة.',
+    sales_user_id,
+    gen_random_uuid(),
+    'daily-plan-smoke-item-result-001'
+  );
+
   UPDATE daily_plans
   SET state = 'COMPLETED',
       completed_by = sales_user_id,
