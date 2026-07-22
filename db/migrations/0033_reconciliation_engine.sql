@@ -291,7 +291,7 @@ BEGIN
       OR linked_entry.customer_account_id <> NEW.customer_account_id
       OR linked_entry.currency_code <> NEW.currency_code
       OR linked_entry.amount_minor <> abs(NEW.difference_amount_minor)
-      OR linked_entry.direction <> CASE WHEN NEW.difference_amount_minor > 0 THEN 'DEBIT' ELSE 'CREDIT' END
+      OR linked_entry.direction <> (CASE WHEN NEW.difference_amount_minor > 0 THEN 'DEBIT' ELSE 'CREDIT' END)
       OR linked_entry.source_type <> 'RECONCILIATION'
       OR linked_entry.source_id <> NEW.id::text THEN
       RAISE EXCEPTION 'settlement ledger entry does not match reconciliation';
@@ -382,7 +382,7 @@ BEGIN
   IF reconciliation.difference_amount_minor = 0 THEN
     RAISE EXCEPTION 'zero difference reconciliation cannot be settled';
   END IF;
-  IF NEW.direction <> CASE WHEN reconciliation.difference_amount_minor > 0 THEN 'DEBIT' ELSE 'CREDIT' END
+  IF NEW.direction <> (CASE WHEN reconciliation.difference_amount_minor > 0 THEN 'DEBIT' ELSE 'CREDIT' END)
     OR NEW.amount_minor <> abs(reconciliation.difference_amount_minor) THEN
     RAISE EXCEPTION 'settlement amount and direction must match reconciliation difference';
   END IF;
