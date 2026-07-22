@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { AuthenticatedUser } from "@/lib/auth/types";
+import { AuthorizationError, type AuthenticatedUser } from "@/lib/auth/types";
 
 import { FieldVisitNotFoundError } from "./errors";
 import {
@@ -32,6 +32,7 @@ describePostgres("PostgreSQL field visits repository", () => {
   let representative: AuthenticatedUser;
   let otherRepresentative: AuthenticatedUser;
   let representativeId = "";
+  let otherRepresentativeId = "";
   let customerId = "";
   let planId = "";
   let planItemId = "";
@@ -93,6 +94,7 @@ describePostgres("PostgreSQL field visits repository", () => {
     `;
     if (!representativeRow || !otherRepresentativeRow) throw new Error("visit representatives were not created");
     representativeId = representativeRow.id;
+    otherRepresentativeId = otherRepresentativeRow.id;
 
     const [area] = await sql<{ id: string }[]>`
       INSERT INTO areas (code, name_ar)
@@ -317,6 +319,40 @@ describePostgres("PostgreSQL field visits repository", () => {
     }, representativeId);
     expect(pageTwo.items.some((visit) => visit.id === pageOne.items[0]?.id)).toBe(false);
     expect(new Set([first.visit.id, second.visit.id, ...pageOne.items.map((visit) => visit.id), ...pageTwo.items.map((visit) => visit.id)]).size).toBeGreaterThanOrEqual(2);
+  }, 30_000);
+
+  it("lets the manager assign an out-of-plan visit only to an active representative", async () => {
+    const assigned = await createFieldVisit(sql, {
+      customerId,
+      representativeId: otherRepresentativeId,
+      visitType: "PROBLEM_RESOLUTION",
+      objective: "تكليف مندوب آخر بمعالجة مشكلة عاجلة.",
+      outOfPlanReason: "تكليف استثنائي موثق من مدير الفرع.",
+    }, command(manager, `visit-manager-assignment-${randomUUID()}`));
+    expect(assigned.visit.representativeId).toBe(otherRepresentativeId);
+
+    await expect(createFieldVisit(sql, {
+      customerId,
+      representativeId: otherRepresentativeId,
+      visitType: "PROBLEM_RESOLUTION",
+      objective: "محاولة إسناد غير مصرح بها.",
+      outOfPlanReason: "يجب رفض نقل النطاق من المندوب.",
+    }, command(representative, `visit-foreign-assignment-${randomUUID()}`))).rejects.toBeInstanceOf(AuthorizationError);
+
+    await sql`UPDATE sales_representatives SET status = 'INACTIVE' WHERE id = ${otherRepresentativeId}`;
+    try {
+      await expect(createFieldVisit(sql, {
+        customerId,
+        representativeId: otherRepresentativeId,
+        visitType: "PROBLEM_RESOLUTION",
+        objective: "محاولة إسناد لمندوب غير نشط.",
+        outOfPlanReason: "اختبار التحقق الخادمي من نشاط المندوب.",
+      }, command(manager, `visit-inactive-assignment-${randomUUID()}`))).rejects.toThrow(
+        "المندوب المحدد غير موجود أو غير نشط",
+      );
+    } finally {
+      await sql`UPDATE sales_representatives SET status = 'ACTIVE' WHERE id = ${otherRepresentativeId}`;
+    }
   }, 30_000);
 });
 
