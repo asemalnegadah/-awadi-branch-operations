@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
-import { requirePermission } from "@/lib/auth/authorization";
 import { getCurrentSession } from "@/lib/auth/current-session";
-import type { PermissionCode } from "@/lib/auth/permissions";
+import { hasPermission, type PermissionCode } from "@/lib/auth/permissions";
 import { AuthorizationError } from "@/lib/auth/types";
 import { getAuthEnv } from "@/lib/config/server-env";
 import { getRequestSecurityContext } from "@/lib/http/request-security-context";
@@ -31,7 +30,7 @@ export type ReconciliationApiAuthorization =
 
 export async function authorizeReconciliationApiRequest(
   request: NextRequest,
-  permission: PermissionCode,
+  permission: PermissionCode | readonly PermissionCode[],
   write: boolean,
 ): Promise<ReconciliationApiAuthorization> {
   const requestContext = getRequestSecurityContext(request);
@@ -68,7 +67,10 @@ export async function authorizeReconciliationApiRequest(
         ),
       };
     }
-    requirePermission(session.user, permission);
+    const required = typeof permission === "string" ? [permission] : permission;
+    if (!required.some((code) => hasPermission(session.user.permissions, code))) {
+      throw new AuthorizationError();
+    }
     return {
       ok: true,
       readContext: Object.freeze({ actor: session.user }),
