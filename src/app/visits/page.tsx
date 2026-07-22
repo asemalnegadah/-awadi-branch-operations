@@ -40,7 +40,11 @@ export default async function FieldVisitsPage({
     listFieldVisits(sql, parseFieldVisitListFilters(params), context),
     canCreate
       ? getFieldVisitFormOptionsPostgres(sql, representativeScope)
-      : Promise.resolve(Object.freeze({ planItems: Object.freeze([]), customers: Object.freeze([]) })),
+      : Promise.resolve(Object.freeze({
+          planItems: Object.freeze([]),
+          customers: Object.freeze([]),
+          representatives: Object.freeze([]),
+        })),
   ]);
 
   return (
@@ -59,7 +63,13 @@ export default async function FieldVisitsPage({
         </div>
       </header>
 
-      {canCreate ? <CreateVisitForm planItems={options.planItems} customers={options.customers} /> : null}
+      {canCreate ? (
+        <CreateVisitForm
+          planItems={options.planItems}
+          customers={options.customers}
+          representatives={options.representatives}
+        />
+      ) : null}
 
       <section className="grid promises-summary" aria-label="ملخص الزيارات الظاهرة">
         <article className="card"><span className="card-label">عدد الزيارات</span><strong>{page.items.length}</strong><small>ضمن الفلاتر الحالية.</small></article>
