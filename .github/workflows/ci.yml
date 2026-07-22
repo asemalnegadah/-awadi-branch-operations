@@ -4,49 +4,133 @@ on:
   pull_request:
   push:
     branches:
+      - main
+      - "agent/**"
       - "chore/**"
+      - "feat/**"
+      - "fix/**"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: eslint-compatible-lock-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lock-eslint-compatible:
-    if: github.event_name == 'pull_request' && github.head_ref == 'chore/eslint10-ecosystem'
-    name: Lock the latest Next-compatible ESLint ecosystem
+  quality:
+    name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: awadi_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d awadi_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
-          ref: ${{ github.head_ref }}
-          persist-credentials: true
           show-progress: false
-      - uses: actions/setup-node@v7
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Generate the compatible dependency graph
-        run: >-
-          npm install --ignore-scripts --no-audit --no-fund --save-dev --save-exact
-          eslint@9.39.5 eslint-config-next@16.2.10
-      - name: Verify peer dependency health
-        run: npm ls eslint eslint-config-next typescript-eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin
-      - name: Validate lint, dual typechecks, and tests
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify Node.js runtime consistency
+        run: npm run verify:node-runtime
+
+      - name: Verify migration sequence
+        run: npm run verify:migrations
+
+      - name: Verify Cloudflare configuration
+        run: npm run verify:cloudflare
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck with TypeScript 7
+        run: npm run typecheck
+
+      - name: Typecheck with TypeScript 6 compatibility API
+        run: npm run typecheck:compat
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Install PostgreSQL client
         run: |
-          npm run lint
-          npm run typecheck
-          npm run typecheck:compat
-          npm run test
-      - name: Commit the tested dependency graph
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Apply PostgreSQL migrations
+        env:
+          PGPASSWORD: postgres
         run: |
           set -euo pipefail
-          git config user.name "awadi-eslint-maintainer"
-          git config user.email "awadi-eslint-maintainer@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "build(eslint): lock the latest Next-compatible ecosystem"
-          git push origin HEAD:chore/eslint10-ecosystem
+          while IFS= read -r migration; do
+            echo "Applying ${migration}"
+            psql \
+              --host localhost \
+              --port 5432 \
+              --username postgres \
+              --dbname awadi_test \
+              --set ON_ERROR_STOP=1 \
+              --file "${migration}"
+          done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
+
+      - name: PostgreSQL integrity tests
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          while IFS= read -r test_file; do
+            echo "Running ${test_file}"
+            psql \
+              --host localhost \
+              --port 5432 \
+              --username postgres \
+              --dbname awadi_test \
+              --set ON_ERROR_STOP=1 \
+              --file "${test_file}"
+          done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
+
+      - name: PostgreSQL repository integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/awadi_test
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee postgres-integration-tests.log
+
+      - name: Upload PostgreSQL integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: postgres-integration-diagnostics
+          path: postgres-integration-tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Build Next.js application
+        run: npm run build
+
+      - name: Build and validate Cloudflare Worker
+        run: npm run cf:check
