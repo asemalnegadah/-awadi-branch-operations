@@ -26,7 +26,7 @@
     "cf:check": "npm run verify:cloudflare && npm run cf:build && npm run cf:dry-run:built"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": "24.x"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "1.20.1",
@@ -38,7 +38,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/node": "24.10.0",
+    "@types/node": "24.13.3",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "eslint": "9.39.0",
