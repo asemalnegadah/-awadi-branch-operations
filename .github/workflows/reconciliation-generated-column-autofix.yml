@@ -1,0 +1,68 @@
+name: Reconciliation generated-column one-time autofix
+
+on:
+  push:
+    branches:
+      - feature/reconciliation-engine
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: feature/reconciliation-engine
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply exact generated-column safety patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('db/migrations/0033_reconciliation_engine.sql')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  'DECLARE\n  linked_entry customer_ledger_entries%ROWTYPE;\nBEGIN\n',
+                  'DECLARE\n  linked_entry customer_ledger_entries%ROWTYPE;\n  derived_difference bigint;\nBEGIN\n  derived_difference := NEW.observed_amount_minor - NEW.expected_amount_minor;\n',
+              ),
+              (
+                  "IF NEW.state = 'MATCHED' AND NEW.difference_amount_minor <> 0 THEN",
+                  "IF NEW.state = 'MATCHED' AND derived_difference <> 0 THEN",
+              ),
+              (
+                  "AND NEW.difference_amount_minor = 0 THEN",
+                  "AND derived_difference = 0 THEN",
+              ),
+              (
+                  'OR linked_entry.amount_minor <> abs(NEW.difference_amount_minor)',
+                  'OR linked_entry.amount_minor <> abs(derived_difference)',
+              ),
+              (
+                  "OR linked_entry.direction <> (CASE WHEN NEW.difference_amount_minor > 0 THEN 'DEBIT' ELSE 'CREDIT' END)",
+                  "OR linked_entry.direction <> (CASE WHEN derived_difference > 0 THEN 'DEBIT' ELSE 'CREDIT' END)",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, found {count}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit exact patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add db/migrations/0033_reconciliation_engine.sql
+          git diff --cached --check
+          git commit -m "fix(reconciliations): derive difference inside update trigger"
+          git push origin HEAD:feature/reconciliation-engine
