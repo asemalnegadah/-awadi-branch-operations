@@ -15,8 +15,9 @@ import {
 const customerId = "11111111-1111-4111-8111-111111111111";
 const planId = "22222222-2222-4222-8222-222222222222";
 const itemId = "33333333-3333-4333-8333-333333333333";
+const representativeId = "44444444-4444-4444-8444-444444444444";
 
- describe("field visit validation", () => {
+describe("field visit validation", () => {
   it("accepts a planned visit only with a complete plan link", () => {
     expect(parseCreateFieldVisit({
       customerId,
@@ -32,6 +33,25 @@ const itemId = "33333333-3333-4333-8333-333333333333";
       visitType: "COLLECTION",
       objective: "تحصيل.",
     })).toThrow("يجب إرسال معرف الخطة وعنصرها معًا");
+  });
+
+  it("accepts representative assignment only for out-of-plan visits", () => {
+    expect(parseCreateFieldVisit({
+      customerId,
+      representativeId,
+      visitType: "PROBLEM_RESOLUTION",
+      objective: "معالجة مشكلة طارئة.",
+      outOfPlanReason: "تكليف مدير الفرع.",
+    })).toMatchObject({ representativeId });
+
+    expect(() => parseCreateFieldVisit({
+      customerId,
+      representativeId,
+      planId,
+      planItemId: itemId,
+      visitType: "COLLECTION",
+      objective: "تحصيل المبلغ المستهدف.",
+    })).toThrow("مندوب الزيارة المرتبطة بالخطة يُستخرج من عنصر الخطة");
   });
 
   it("requires a documented reason for an out-of-plan visit", () => {
