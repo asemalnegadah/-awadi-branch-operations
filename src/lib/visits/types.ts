@@ -186,6 +186,7 @@ export interface FieldVisitCommandContext extends FieldVisitReadContext {
 
 export interface CreateFieldVisitInput {
   readonly customerId: string;
+  readonly representativeId?: string | null | undefined;
   readonly planId?: string | null | undefined;
   readonly planItemId?: string | null | undefined;
   readonly visitType: FieldVisitType;
