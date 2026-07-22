@@ -31,7 +31,9 @@ const workflowFiles = (await readdir(workflowDirectory, { withFileTypes: true })
 let setupNodeReferences = 0;
 for (const workflowFile of workflowFiles) {
   const content = await readFile(workflowFile, "utf8");
-  for (const match of content.matchAll(/node-version:\s*["']?([^\s"']+)/gu)) {
+  for (const match of content.matchAll(
+    /^\s*node-version:\s*["']?(\d+(?:\.\d+){0,2})["']?\s*$/gmu,
+  )) {
     setupNodeReferences += 1;
     assertMajor(match[1], expectedMajor, path.relative(repositoryRoot, workflowFile));
   }
