@@ -220,7 +220,9 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   linked_entry customer_ledger_entries%ROWTYPE;
+  derived_difference bigint;
 BEGIN
+  derived_difference := NEW.observed_amount_minor - NEW.expected_amount_minor;
   IF ROW(OLD.id, OLD.created_by, OLD.created_at, OLD.idempotency_key, OLD.create_payload)
     IS DISTINCT FROM
     ROW(NEW.id, NEW.created_by, NEW.created_at, NEW.idempotency_key, NEW.create_payload) THEN
@@ -245,11 +247,11 @@ BEGIN
     RAISE EXCEPTION 'invalid reconciliation transition: % -> %', OLD.state, NEW.state;
   END IF;
 
-  IF NEW.state = 'MATCHED' AND NEW.difference_amount_minor <> 0 THEN
+  IF NEW.state = 'MATCHED' AND derived_difference <> 0 THEN
     RAISE EXCEPTION 'only a zero difference can be marked matched';
   END IF;
   IF NEW.state IN ('PENDING_REVIEW', 'REVIEWED', 'PENDING_APPROVAL', 'APPROVED', 'SETTLED')
-    AND NEW.difference_amount_minor = 0 THEN
+    AND derived_difference = 0 THEN
     RAISE EXCEPTION 'zero difference reconciliation must be marked matched';
   END IF;
   IF NEW.state IN ('REVIEWED', 'PENDING_APPROVAL', 'APPROVED', 'SETTLED')
@@ -290,8 +292,8 @@ BEGIN
       OR linked_entry.customer_id <> NEW.customer_id
       OR linked_entry.customer_account_id <> NEW.customer_account_id
       OR linked_entry.currency_code <> NEW.currency_code
-      OR linked_entry.amount_minor <> abs(NEW.difference_amount_minor)
-      OR linked_entry.direction <> (CASE WHEN NEW.difference_amount_minor > 0 THEN 'DEBIT' ELSE 'CREDIT' END)
+      OR linked_entry.amount_minor <> abs(derived_difference)
+      OR linked_entry.direction <> (CASE WHEN derived_difference > 0 THEN 'DEBIT' ELSE 'CREDIT' END)
       OR linked_entry.source_type <> 'RECONCILIATION'
       OR linked_entry.source_id <> NEW.id::text THEN
       RAISE EXCEPTION 'settlement ledger entry does not match reconciliation';
