@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import {
   CreditRiskBusinessRuleError,
@@ -452,7 +452,7 @@ export async function revokeCreditExceptionPostgres(
 }
 
 export async function listCreditRestrictionsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<readonly CreditRestriction[]> {
@@ -467,7 +467,7 @@ export async function listCreditRestrictionsPostgres(
 }
 
 export async function listCreditExceptionsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<readonly CreditException[]> {
@@ -482,7 +482,7 @@ export async function listCreditExceptionsPostgres(
 }
 
 export async function listCreditRestrictionEventsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<readonly CreditDecisionEvent[]> {
@@ -512,7 +512,7 @@ export async function listCreditRestrictionEventsPostgres(
 }
 
 export async function listCreditExceptionEventsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<readonly CreditDecisionEvent[]> {
@@ -542,7 +542,7 @@ export async function listCreditExceptionEventsPostgres(
 }
 
 export async function evaluateCreditSalePostgres(
-  sql: Sql,
+  sql: TransactionSql,
   customerAccountId: string,
   amountMinor: number,
   representativeScopeId?: string,
@@ -813,7 +813,7 @@ async function transitionException(
 }
 
 async function requireRestrictionById(
-  sql: Sql,
+  sql: TransactionSql,
   restrictionId: string,
   representativeScopeId?: string,
   lock = false,
@@ -841,7 +841,7 @@ async function requireRestrictionById(
 }
 
 async function requireExceptionById(
-  sql: Sql,
+  sql: TransactionSql,
   exceptionId: string,
   representativeScopeId?: string,
   lock = false,
@@ -869,7 +869,7 @@ async function requireExceptionById(
 }
 
 async function findRestrictionByIdempotencyKey(
-  sql: Sql,
+  sql: TransactionSql,
   key: string,
 ): Promise<RestrictionRow | null> {
   const rows = await sql.unsafe<RestrictionRow[]>(
@@ -882,7 +882,7 @@ async function findRestrictionByIdempotencyKey(
 }
 
 async function findExceptionByIdempotencyKey(
-  sql: Sql,
+  sql: TransactionSql,
   key: string,
 ): Promise<ExceptionRow | null> {
   const rows = await sql.unsafe<ExceptionRow[]>(
@@ -895,7 +895,7 @@ async function findExceptionByIdempotencyKey(
 }
 
 async function findRestrictionEventReplay(
-  sql: Sql,
+  sql: TransactionSql,
   key: string,
   restrictionId: string,
   eventType: string,
@@ -921,7 +921,7 @@ async function findRestrictionEventReplay(
 }
 
 async function findExceptionEventReplay(
-  sql: Sql,
+  sql: TransactionSql,
   key: string,
   exceptionId: string,
   eventType: string,
@@ -947,7 +947,7 @@ async function findExceptionEventReplay(
 }
 
 async function insertRestrictionEvent(
-  transaction: Sql,
+  transaction: TransactionSql,
   restrictionId: string,
   eventType: CreditDecisionEvent["eventType"],
   context: CreditRiskCommandContext,
@@ -980,7 +980,7 @@ async function insertRestrictionEvent(
 }
 
 async function insertExceptionEvent(
-  transaction: Sql,
+  transaction: TransactionSql,
   exceptionId: string,
   eventType: CreditDecisionEvent["eventType"],
   context: CreditRiskCommandContext,
@@ -1013,7 +1013,7 @@ async function insertExceptionEvent(
 }
 
 async function insertDecisionAudit(
-  transaction: Sql,
+  transaction: TransactionSql,
   context: CreditRiskCommandContext,
   action: string,
   resourceType: string,

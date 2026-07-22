@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import {
   DailyPlanBusinessRuleError,
@@ -318,7 +318,7 @@ export async function generateDailyPlanPostgres(
 }
 
 export async function loadDailyPlanCandidateInputsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   representativeId: string,
   planDate: string,
   cutoffAt: string,
@@ -551,7 +551,7 @@ export async function loadDailyPlanCandidateInputsPostgres(
 }
 
 async function insertCandidate(
-  transaction: Sql,
+  transaction: TransactionSql,
   planId: string,
   candidate: PlannedDailyPlanCandidate,
 ): Promise<void> {
@@ -593,7 +593,7 @@ async function insertCandidate(
 }
 
 async function insertPlanItem(
-  transaction: Sql,
+  transaction: TransactionSql,
   planId: string,
   candidate: PlannedDailyPlanCandidate,
   actorUserId: string,
@@ -654,7 +654,7 @@ async function insertPlanItem(
 }
 
 async function findPlanByIdempotencyKey(
-  sql: Sql,
+  sql: TransactionSql,
   key: string,
   generationRequest: Readonly<Record<string, unknown>>,
   lock: boolean,
@@ -684,7 +684,7 @@ function assertPlanGenerationReplay(row: PlanRow, input: GenerateDailyPlanInput)
 }
 
 async function getGeneratedPlanDetails(
-  sql: Sql,
+  sql: TransactionSql,
   planId: string,
 ): Promise<DailyPlanDetails> {
   const plan = await requirePlanById(sql, planId);
@@ -713,7 +713,7 @@ async function getGeneratedPlanDetails(
   });
 }
 
-async function requirePlanById(sql: Sql, planId: string): Promise<DailyPlan> {
+async function requirePlanById(sql: TransactionSql, planId: string): Promise<DailyPlan> {
   const rows = await sql.unsafe<PlanRow[]>(
     `${planSelect} WHERE plan.id = $1::uuid`,
     [planId],
@@ -724,7 +724,7 @@ async function requirePlanById(sql: Sql, planId: string): Promise<DailyPlan> {
 }
 
 async function insertGeneratedEvent(
-  transaction: Sql,
+  transaction: TransactionSql,
   plan: DailyPlan,
   context: DailyPlanCommandContext,
   generationRequest: Readonly<Record<string, unknown>>,
@@ -767,7 +767,7 @@ async function insertGeneratedEvent(
 }
 
 async function insertGenerationAudit(
-  transaction: Sql,
+  transaction: TransactionSql,
   plan: DailyPlan,
   context: DailyPlanCommandContext,
 ): Promise<void> {

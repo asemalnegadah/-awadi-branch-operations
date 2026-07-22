@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import {
   DailyPlanBusinessRuleError,
@@ -240,7 +240,7 @@ async function transitionDailyPlan(
 }
 
 async function findTransitionReplay(
-  transaction: Sql,
+  transaction: TransactionSql,
   idempotencyKey: string,
   planId: string,
   eventType: DailyPlanTransitionEvent,
@@ -275,7 +275,7 @@ async function findTransitionReplay(
 }
 
 async function insertTransitionEvent(
-  transaction: Sql,
+  transaction: TransactionSql,
   planId: string,
   eventType: DailyPlanTransitionEvent,
   context: DailyPlanCommandContext,
@@ -322,7 +322,7 @@ async function insertTransitionEvent(
 }
 
 async function insertTransitionAudit(
-  transaction: Sql,
+  transaction: TransactionSql,
   plan: DailyPlan,
   eventType: DailyPlanTransitionEvent,
   context: DailyPlanCommandContext,

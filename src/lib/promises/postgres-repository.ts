@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import type { CurrencyCode } from "@/lib/domain/currency";
 
@@ -227,7 +227,7 @@ const promiseJoins = `
 `;
 
 export async function getActiveRepresentativeIdByUserPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   userId: string,
 ): Promise<string | null> {
   const rows = await sql.unsafe<{ id: string }[]>(
@@ -372,7 +372,7 @@ export async function createPromisePostgres(
 }
 
 export async function getPromisePostgres(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PaymentPromise | null> {
@@ -408,7 +408,7 @@ export async function getPromiseDetailsPostgres(
 }
 
 export async function listPromisesPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   filters: PromiseListFilters,
   representativeScopeId?: string,
 ): Promise<PromisePage> {
@@ -1329,7 +1329,7 @@ export async function reverseCollectionAllocationPostgres(
 }
 
 export async function getPromiseHistoryPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
 ): Promise<readonly PaymentPromiseEvent[]> {
   const rows = await sql.unsafe<EventRow[]>(
@@ -1360,7 +1360,7 @@ export async function getPromiseHistoryPostgres(
 }
 
 export async function getDuePromisesPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   limit = 100,
   representativeScopeId?: string,
 ): Promise<PromisePage> {
@@ -1372,7 +1372,7 @@ export async function getDuePromisesPostgres(
 }
 
 export async function getOverduePromisesPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   limit = 100,
   representativeScopeId?: string,
 ): Promise<PromisePage> {
@@ -1384,7 +1384,7 @@ export async function getOverduePromisesPostgres(
 }
 
 export async function getCustomerPromiseSummaryPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   customerId: string,
   representativeScopeId?: string,
 ): Promise<CustomerPromiseSummary | null> {
@@ -1413,7 +1413,7 @@ export async function getCustomerPromiseSummaryPostgres(
 }
 
 export async function getSalespersonPromiseSummaryPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   representativeId: string,
   representativeScopeId?: string,
 ): Promise<SalespersonPromiseSummary | null> {
@@ -1438,7 +1438,7 @@ export async function getSalespersonPromiseSummaryPostgres(
 }
 
 export async function getPromiseDashboardSummaryPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   representativeScopeId?: string,
 ): Promise<readonly CurrencyPromiseSummary[]> {
   return Object.freeze(
@@ -1453,7 +1453,7 @@ export async function getPromiseDashboardSummaryPostgres(
 }
 
 export async function getPromiseFormOptionsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   representativeScopeId?: string,
 ): Promise<PromiseFormOptions> {
   const accountParameters: SqlParameter[] = [];
@@ -1526,7 +1526,7 @@ export async function getPromiseFormOptionsPostgres(
 }
 
 export async function listAvailableConfirmedCollectionsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<readonly ConfirmedCollectionOption[]> {
@@ -1677,7 +1677,7 @@ async function terminalTransition(
 }
 
 async function findOperationReplay(
-  transaction: Sql,
+  transaction: TransactionSql,
   promiseId: string,
   eventType: PromiseEventType,
   idempotencyKey: string,
@@ -1721,7 +1721,7 @@ async function findOperationReplay(
 }
 
 async function insertEvent(
-  transaction: Sql,
+  transaction: TransactionSql,
   input: {
     readonly promiseId: string;
     readonly context: PromiseCommandContext;
@@ -1778,7 +1778,7 @@ async function insertEvent(
 }
 
 async function insertAudit(
-  transaction: Sql,
+  transaction: TransactionSql,
   context: PromiseCommandContext,
   action: string,
   resourceId: string,
@@ -1825,7 +1825,7 @@ async function insertAudit(
 }
 
 async function insertStatusEventIfChanged(
-  transaction: Sql,
+  transaction: TransactionSql,
   oldStatus: PromiseBaseStatus,
   promise: PaymentPromise,
   context: PromiseCommandContext,
@@ -1880,7 +1880,7 @@ function specializedEvent(
 }
 
 async function selectPromises(
-  sql: Sql,
+  sql: TransactionSql,
   suffix: string,
   parameters: readonly SqlParameter[],
 ): Promise<PromiseRow[]> {
@@ -1891,7 +1891,7 @@ async function selectPromises(
 }
 
 async function assertActiveRepresentativeAssignment(
-  sql: Sql,
+  sql: TransactionSql,
   representativeId: string,
   customerId: string,
 ): Promise<void> {
@@ -1910,7 +1910,7 @@ async function assertActiveRepresentativeAssignment(
 }
 
 async function requirePromiseById(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PaymentPromise> {
@@ -1920,7 +1920,7 @@ async function requirePromiseById(
 }
 
 async function lockPromise(
-  transaction: Sql,
+  transaction: TransactionSql,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PromiseLockRow> {
@@ -1955,7 +1955,7 @@ async function lockPromise(
 }
 
 async function locklessPromise(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PromiseLockRow | null> {
@@ -1988,7 +1988,7 @@ async function locklessPromise(
 }
 
 async function lockCollection(
-  transaction: Sql,
+  transaction: TransactionSql,
   collectionId: string,
 ): Promise<CollectionLockRow> {
   const rows = await transaction.unsafe<CollectionLockRow[]>(
@@ -2058,7 +2058,7 @@ const followUpSelect = `
 `;
 
 async function listPromiseFollowUpsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
 ): Promise<readonly PaymentPromiseFollowUp[]> {
   const rows = await sql.unsafe<FollowUpRow[]>(
@@ -2092,7 +2092,7 @@ const allocationSelect = `
 `;
 
 async function listPromiseAllocationsPostgres(
-  sql: Sql,
+  sql: TransactionSql,
   promiseId: string,
 ): Promise<readonly PaymentPromiseAllocation[]> {
   const rows = await sql.unsafe<AllocationRow[]>(
@@ -2105,7 +2105,7 @@ async function listPromiseAllocationsPostgres(
 }
 
 async function summaryRows(
-  sql: Sql,
+  sql: TransactionSql,
   condition: string,
   parameters: readonly SqlParameter[],
 ): Promise<SummaryRow[]> {

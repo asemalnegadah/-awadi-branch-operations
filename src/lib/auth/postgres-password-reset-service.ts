@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import type {
   PasswordResetEmailSender,
@@ -402,7 +402,7 @@ export async function resetPasswordPostgres(
 }
 
 async function isRequestThrottled(
-  sql: Sql,
+  sql: TransactionSql,
   normalizedEmail: string,
   context: RequestSecurityContext,
   configuration: PasswordRecoveryConfiguration,
@@ -438,7 +438,7 @@ async function isRequestThrottled(
 }
 
 async function findEligibleUser(
-  sql: Sql,
+  sql: TransactionSql,
   normalizedEmail: string,
 ): Promise<ResetUserRow | null> {
   const rows = await sql<ResetUserRow[]>`
@@ -465,7 +465,7 @@ function canBootstrapInitialManager(
 }
 
 async function createInitialManagerInvitation(
-  sql: Sql,
+  sql: TransactionSql,
   normalizedEmail: string,
   fullName: string,
   context: RequestSecurityContext,
@@ -558,7 +558,7 @@ async function createInitialManagerInvitation(
 }
 
 async function recordRequestAudit(
-  sql: Sql,
+  sql: TransactionSql,
   userId: string | null,
   normalizedEmail: string,
   context: RequestSecurityContext,
