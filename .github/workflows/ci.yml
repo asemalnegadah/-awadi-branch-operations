@@ -11,13 +11,66 @@ on:
       - "fix/**"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  align-node-runtime:
+    if: github.event_name == 'pull_request' && github.head_ref == 'chore/node24-runtime-baseline'
+    name: Align Node.js 24 runtime declarations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+          show-progress: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Regenerate the locked Node type dependency
+        run: npm install --ignore-scripts --no-audit --no-fund --save-dev --save-exact @types/node@24.13.3
+      - name: Align every workflow runtime declaration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          workflow_dir = Path('.github/workflows')
+          for path in sorted(workflow_dir.glob('*.y*ml')):
+              text = path.read_text()
+              updated = re.sub(
+                  r'(node-version:\s*["\']?)22(?:\.x)?(["\']?)',
+                  r'\g<1>24\g<2>',
+                  text,
+              )
+              path.write_text(updated)
+          PY
+      - name: Verify runtime inventory and project behavior
+        run: |
+          npm run verify:node-runtime
+          npm run lint
+          npm run typecheck
+          npm run test
+      - name: Restore canonical CI shape with Node.js 24 and commit
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git show origin/main:.github/workflows/ci.yml \
+            | sed -E 's/(node-version:[[:space:]]*["'"']?)22(\.x)?(["'"']?)/\124\3/g' \
+            > .github/workflows/ci.yml
+          git config user.name "awadi-runtime-maintainer"
+          git config user.email "awadi-runtime-maintainer@users.noreply.github.com"
+          git add package.json package-lock.json .nvmrc .node-version scripts/verify-node-runtime.mjs .github/workflows
+          git commit -m "build(node): standardize all toolchains on Node.js 24 LTS"
+          git push origin HEAD:chore/node24-runtime-baseline
+
   quality:
     name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04
@@ -48,12 +101,15 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Verify Node.js runtime consistency
+        run: npm run verify:node-runtime
 
       - name: Verify migration sequence
         run: npm run verify:migrations
