@@ -1,5 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 
+type SqlExecutor = Sql | TransactionSql;
+
 import {
   CreditRiskConflictError,
   CreditRiskIdempotencyConflictError,
@@ -216,7 +218,7 @@ export async function reverseCreditExceptionUsagePostgres(
 }
 
 export async function listCreditExceptionUsagesPostgres(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<readonly CreditExceptionUsageEntry[]> {
@@ -241,7 +243,7 @@ export async function listCreditExceptionUsagesPostgres(
 }
 
 export async function evaluateCreditSaleWithUsagePostgres(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   customerAccountId: string,
   amountMinor: number,
   representativeScopeId?: string,
@@ -331,7 +333,7 @@ export async function evaluateCreditSaleWithUsagePostgres(
 }
 
 async function requireExceptionScope(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   exceptionId: string,
   representativeScopeId?: string,
 ): Promise<void> {
@@ -358,7 +360,7 @@ async function requireExceptionScope(
 }
 
 async function findUsageByIdempotencyKey(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   key: string,
 ): Promise<UsageRow | null> {
   const rows = await sql.unsafe<UsageRow[]>(
@@ -370,7 +372,7 @@ async function findUsageByIdempotencyKey(
   return rows[0] ?? null;
 }
 
-async function requireUsageById(sql: TransactionSql, usageId: string): Promise<CreditExceptionUsageEntry> {
+async function requireUsageById(sql: SqlExecutor, usageId: string): Promise<CreditExceptionUsageEntry> {
   const rows = await sql.unsafe<UsageRow[]>(
     `${usageSelect} WHERE entry.id = $1::uuid`,
     [usageId],
@@ -394,7 +396,7 @@ function assertConsumeReplay(row: UsageRow, input: ConsumeCreditExceptionInput):
 }
 
 async function insertUsageAudit(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   context: CreditRiskCommandContext,
   action: string,
   usage: CreditExceptionUsageEntry,

@@ -1,5 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 
+type SqlExecutor = Sql | TransactionSql;
+
 import { isPermissionCode, type PermissionCode } from "./permissions";
 import { hashPassword, verifyPassword } from "./password";
 import { isSystemRoleCode, type SystemRoleCode } from "./roles";
@@ -447,7 +449,7 @@ async function reserveLoginAttempt(
 }
 
 async function loadLoginUser(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   normalizedEmail: string,
 ): Promise<LoginUserRow | null> {
   const rows = await sql<LoginUserRow[]>`
@@ -731,7 +733,7 @@ async function finalizeSuccessfulLogin(
 }
 
 async function lockCurrentUser(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   userId: string,
 ): Promise<LoginUserRow | null> {
   const rows = await transaction<LoginUserRow[]>`
@@ -755,7 +757,7 @@ async function lockCurrentUser(
 }
 
 async function completeReservedAttempt(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   attemptId: string,
   userId: string | null,
   sessionId: string | null,
@@ -780,7 +782,7 @@ async function completeReservedAttempt(
 }
 
 async function recordLoginAudit(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   normalizedEmail: string,
   userId: string | null,
   sessionId: string | null,
@@ -818,7 +820,7 @@ async function recordLoginAudit(
 }
 
 async function getAuthenticatedSessionByHash(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   tokenHash: string,
   touch: boolean,
   idleTimeoutMinutes: number,

@@ -1,5 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 
+type SqlExecutor = Sql | TransactionSql;
+
 import {
   DailyPlanBusinessRuleError,
   DailyPlanConflictError,
@@ -254,7 +256,7 @@ export async function deleteDailyPlanItemPostgres(
 }
 
 async function requireItemById(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   planId: string,
   itemId: string,
   lock = false,
@@ -271,7 +273,7 @@ async function requireItemById(
 }
 
 async function findAdjustmentReplay(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   idempotencyKey: string,
   planId: string,
   itemId: string | null,
@@ -305,7 +307,7 @@ async function findAdjustmentReplay(
 }
 
 async function findDeletedItemSnapshot(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   idempotencyKey: string,
 ): Promise<DailyPlanItem | null> {
   const rows = await transaction.unsafe<{ old_values: Readonly<Record<string, unknown>> }[]>(
@@ -318,7 +320,7 @@ async function findDeletedItemSnapshot(
 }
 
 async function insertAdjustment(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   planId: string,
   itemId: string | null,
   adjustmentType: string,
@@ -363,7 +365,7 @@ async function insertAdjustment(
 }
 
 async function insertManagementAudit(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   context: DailyPlanCommandContext,
   action: string,
   planId: string,

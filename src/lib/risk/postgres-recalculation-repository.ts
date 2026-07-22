@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import type { Sql, TransactionSql } from "postgres";
 
+type SqlExecutor = Sql | TransactionSql;
+
 import {
   CreditRiskIdempotencyConflictError,
   CreditRiskNotFoundError,
@@ -177,7 +179,7 @@ export async function recalculateCreditRiskIdempotentPostgres(
 }
 
 async function findByIdempotencyKey(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   idempotencyKey: string,
   lock: boolean,
 ): Promise<AssessmentRow | null> {
@@ -190,7 +192,7 @@ async function findByIdempotencyKey(
   return rows[0] ?? null;
 }
 
-async function requireById(sql: TransactionSql, assessmentId: string): Promise<CreditRiskAssessment> {
+async function requireById(sql: SqlExecutor, assessmentId: string): Promise<CreditRiskAssessment> {
   const rows = await sql.unsafe<AssessmentRow[]>(
     `${assessmentSelect} WHERE assessment.id = $1::uuid`,
     [assessmentId],
@@ -207,7 +209,7 @@ function assertSameOperation(row: AssessmentRow, customerAccountId: string): voi
 }
 
 async function insertAudit(
-  transaction: TransactionSql,
+  transaction: SqlExecutor,
   context: CreditRiskCommandContext,
   assessment: CreditRiskAssessment,
 ): Promise<void> {

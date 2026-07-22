@@ -1,5 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 
+type SqlExecutor = Sql | TransactionSql;
+
 import type { ProcessedOnyxDebtAgingPdf } from "./process-onyx-debt-aging-pdf";
 import {
   classifyReportVersion,
@@ -151,7 +153,7 @@ export async function persistProcessedOnyxDebtAgingPostgres(
 }
 
 async function insertRegisteredFile(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   processed: ReviewReadyProcessed,
   context: PersistOnyxExtractionContext,
 ): Promise<string> {
@@ -188,7 +190,7 @@ async function insertRegisteredFile(
 }
 
 async function findCurrentSnapshot(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   reportSeriesKey: string,
 ): Promise<CurrentSnapshotRow | undefined> {
   const rows = await sql.unsafe<CurrentSnapshotRow[]>(
@@ -213,7 +215,7 @@ async function findCurrentSnapshot(
 }
 
 async function markFileExtracted(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   uploadedFileId: string,
   processed: ReviewReadyProcessed,
   actorId: string,
@@ -260,7 +262,7 @@ async function markFileExtracted(
 }
 
 async function insertExtraction(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   uploadedFileId: string,
   processed: ReviewReadyProcessed,
   context: PersistOnyxExtractionContext,
@@ -322,7 +324,7 @@ async function insertExtraction(
 }
 
 async function insertExtractedRows(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   extractionId: string,
   processed: ReviewReadyProcessed,
 ): Promise<void> {
@@ -360,7 +362,7 @@ async function insertExtractedRows(
 }
 
 async function insertSnapshot(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   uploadedFileId: string,
   processed: ReviewReadyProcessed,
   actorId: string,
@@ -423,7 +425,7 @@ async function insertSnapshot(
 }
 
 async function findExistingPersistence(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   idempotencyKey: string,
   sha256: string,
 ): Promise<ExistingPersistenceRow | undefined> {
@@ -512,7 +514,7 @@ function samePersistenceRequest(
 }
 
 async function transitionFile(
-  sql: TransactionSql,
+  sql: SqlExecutor,
   uploadedFileId: string,
   actorId: string,
   status: "UPLOADED" | "QUEUED" | "EXTRACTING" | "REVIEW_REQUIRED",
