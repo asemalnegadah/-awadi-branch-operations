@@ -1,0 +1,157 @@
+name: Apply reviewed production dependency patches
+
+on:
+  push:
+    branches:
+      - chore/deps-production-patches
+    paths:
+      - .github/workflows/apply-production-patches-reviewed.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: true
+          show-progress: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Update isolated dependencies
+        run: >-
+          npm install --ignore-scripts --no-audit --no-fund --save-exact
+          postgres@3.4.9 react@19.2.7 react-dom@19.2.7
+      - name: Classify root and transactional SQL executors
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const ts = require('typescript');
+          const files = [
+            'src/lib/auth/postgres-auth-service.ts',
+            'src/lib/auth/postgres-password-reset-service.ts',
+            'src/lib/imports/postgres-extraction-repository.ts',
+            'src/lib/plans/postgres-generation-repository.ts',
+            'src/lib/plans/postgres-management-repository.ts',
+            'src/lib/plans/postgres-read-repository.ts',
+            'src/lib/plans/postgres-transition-repository.ts',
+            'src/lib/promises/postgres-repository.ts',
+            'src/lib/risk/postgres-assessment-repository.ts',
+            'src/lib/risk/postgres-decision-repository.ts',
+            'src/lib/risk/postgres-recalculation-repository.ts',
+            'src/lib/risk/postgres-usage-repository.ts',
+          ];
+          const forcedRootNames = new Set([
+            'loginPostgres',
+            'submitDailyPlanPostgres',
+            'approveDailyPlanPostgres',
+            'rejectDailyPlanPostgres',
+            'startDailyPlanPostgres',
+            'completeDailyPlanPostgres',
+            'cancelDailyPlanPostgres',
+            'rejectPromisePostgres',
+            'cancelPromisePostgres',
+            'submitCreditRestrictionPostgres',
+            'approveCreditRestrictionPostgres',
+            'rejectCreditRestrictionPostgres',
+            'revokeCreditRestrictionPostgres',
+            'submitCreditExceptionPostgres',
+            'approveCreditExceptionPostgres',
+            'rejectCreditExceptionPostgres',
+            'revokeCreditExceptionPostgres',
+          ]);
+          function functionName(node) {
+            if (node.name && ts.isIdentifier(node.name)) return node.name.text;
+            if (node.parent && ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name)) return node.parent.name.text;
+            return null;
+          }
+          function containsBegin(node) {
+            let found = false;
+            function visit(child) {
+              if (found) return;
+              if (ts.isCallExpression(child) && ts.isPropertyAccessExpression(child.expression) && child.expression.name.text === 'begin') {
+                found = true;
+                return;
+              }
+              ts.forEachChild(child, visit);
+            }
+            visit(node);
+            return found;
+          }
+          for (const file of files) {
+            let text = fs.readFileSync(file, 'utf8');
+            const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+            const functions = new Map();
+            function collect(node) {
+              if (ts.isFunctionLike(node) && node.body) {
+                const name = functionName(node);
+                if (name) functions.set(name, node);
+              }
+              ts.forEachChild(node, collect);
+            }
+            collect(source);
+            const rootNames = new Set([...forcedRootNames]);
+            for (const [name, node] of functions) if (containsBegin(node.body)) rootNames.add(name);
+            let changed = true;
+            while (changed) {
+              changed = false;
+              for (const [name, node] of functions) {
+                if (rootNames.has(name)) continue;
+                let callsRoot = false;
+                function inspect(child) {
+                  if (callsRoot) return;
+                  if (ts.isCallExpression(child) && ts.isIdentifier(child.expression) && rootNames.has(child.expression.text)) {
+                    callsRoot = true;
+                    return;
+                  }
+                  ts.forEachChild(child, inspect);
+                }
+                inspect(node.body);
+                if (callsRoot) {
+                  rootNames.add(name);
+                  changed = true;
+                }
+              }
+            }
+            const edits = [];
+            for (const [name, node] of functions) {
+              if (rootNames.has(name)) continue;
+              for (const parameter of node.parameters) {
+                const type = parameter.type;
+                if (type && ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName) && type.typeName.text === 'Sql') {
+                  edits.push({ start: type.getStart(source), end: type.getEnd() });
+                }
+              }
+            }
+            for (const edit of edits.sort((a, b) => b.start - a.start)) {
+              text = text.slice(0, edit.start) + 'TransactionSql' + text.slice(edit.end);
+            }
+            const oldImport = 'import type { Sql } from "postgres";';
+            if (text.includes(oldImport)) {
+              text = text.replace(oldImport, 'import type { Sql, TransactionSql } from "postgres";');
+            } else if (!text.includes('TransactionSql')) {
+              throw new Error(`Postgres type import not found in ${file}`);
+            }
+            fs.writeFileSync(file, text);
+          }
+          NODE
+      - name: Validate actual updated tree
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run test
+      - name: Commit reviewed update and remove workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-production-patches-reviewed.yml
+          git config user.name "awadi-dependency-maintainer"
+          git config user.email "awadi-dependency-maintainer@users.noreply.github.com"
+          git add package.json package-lock.json src/lib .github/workflows/apply-production-patches-reviewed.yml
+          git commit -m "build(deps): update React, Postgres, and transaction types"
+          git push origin HEAD:chore/deps-production-patches
