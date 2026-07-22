@@ -11,13 +11,51 @@ on:
       - "fix/**"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  prepare-eslint10:
+    if: github.event_name == 'pull_request' && github.head_ref == 'chore/eslint10-ecosystem'
+    name: Prepare and validate ESLint 10 ecosystem
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+          show-progress: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Generate the ESLint 10 dependency graph
+        run: >-
+          npm install --ignore-scripts --no-audit --no-fund --save-dev --save-exact
+          eslint@10.7.0 eslint-config-next@16.2.10
+      - name: Verify resolved lint ecosystem
+        run: npm ls eslint eslint-config-next typescript-eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin
+      - name: Validate lint, types, and behavior
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run typecheck:compat
+          npm run test
+      - name: Commit the tested dependency graph
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- .github/workflows/ci.yml
+          git config user.name "awadi-eslint-maintainer"
+          git config user.email "awadi-eslint-maintainer@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "build(eslint): lock the ESLint 10 ecosystem"
+          git push origin HEAD:chore/eslint10-ecosystem
+
   quality:
     name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04
@@ -88,13 +126,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r migration; do
             echo "Applying ${migration}"
-            psql \
-              --host localhost \
-              --port 5432 \
-              --username postgres \
-              --dbname awadi_test \
-              --set ON_ERROR_STOP=1 \
-              --file "${migration}"
+            psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "${migration}"
           done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
 
       - name: PostgreSQL integrity tests
@@ -104,13 +136,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r test_file; do
             echo "Running ${test_file}"
-            psql \
-              --host localhost \
-              --port 5432 \
-              --username postgres \
-              --dbname awadi_test \
-              --set ON_ERROR_STOP=1 \
-              --file "${test_file}"
+            psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "${test_file}"
           done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
 
       - name: PostgreSQL repository integration tests
