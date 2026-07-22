@@ -55,6 +55,10 @@ export type PermissionCode = (typeof permissionCodes)[number];
 
 const permissionSet = new Set<string>(permissionCodes);
 
+const permissionImplications: Partial<Record<PermissionCode, readonly PermissionCode[]>> = {
+  "visits.read_own": ["visits.read_all"],
+};
+
 export function isPermissionCode(value: string): value is PermissionCode {
   return permissionSet.has(value);
 }
@@ -63,5 +67,8 @@ export function hasPermission(
   grantedPermissions: ReadonlySet<PermissionCode>,
   requiredPermission: PermissionCode,
 ): boolean {
-  return grantedPermissions.has(requiredPermission);
+  if (grantedPermissions.has(requiredPermission)) return true;
+  return permissionImplications[requiredPermission]?.some((permission) => (
+    grantedPermissions.has(permission)
+  )) ?? false;
 }
