@@ -5,6 +5,7 @@ import type { PermissionCode } from "@/lib/auth/permissions";
 import { AuthorizationError } from "@/lib/auth/types";
 import { getActiveRepresentativeIdByUserPostgres } from "@/lib/promises/postgres-repository";
 
+import { FieldVisitBusinessRuleError } from "./errors";
 import { listFieldVisitsStablePostgres } from "./postgres-list-repository";
 import {
   addFieldVisitEvidencePostgres,
@@ -244,25 +245,53 @@ async function resolveVisitCreatorRepresentative(
   input: CreateFieldVisitInput,
   context: FieldVisitReadContext,
 ): Promise<string> {
-  const activeRepresentativeId = await getActiveRepresentativeIdByUserPostgres(
-    sql,
-    context.actor.id,
-  );
-  if (activeRepresentativeId) return activeRepresentativeId;
-  if (!context.actor.roles.includes("BRANCH_MANAGER") || !input.planItemId) {
+  const isManager = context.actor.roles.includes("BRANCH_MANAGER");
+
+  if (input.planItemId) {
+    const rows = await sql.unsafe<{ representative_id: string }[]>(
+      `SELECT plan.representative_id
+       FROM daily_plan_items AS item
+       JOIN daily_plans AS plan ON plan.id = item.plan_id
+       JOIN sales_representatives AS representative ON representative.id = plan.representative_id
+       WHERE item.id = $1::uuid
+         AND ($2::uuid IS NULL OR plan.id = $2::uuid)
+         AND representative.status = 'ACTIVE'`,
+      [input.planItemId, input.planId ?? null],
+    );
+    const representativeId = rows[0]?.representative_id;
+    if (!representativeId) {
+      throw new FieldVisitBusinessRuleError("عنصر الخطة غير صالح أو مندوبه غير نشط.");
+    }
+    if (!isManager) {
+      const ownRepresentativeId = await requireActiveRepresentativeId(sql, context);
+      if (ownRepresentativeId !== representativeId) throw new AuthorizationError();
+    }
+    return representativeId;
+  }
+
+  if (isManager) {
+    if (!input.representativeId) {
+      throw new FieldVisitBusinessRuleError("يجب تحديد مندوب نشط للزيارة خارج الخطة.");
+    }
+    const rows = await sql.unsafe<{ id: string }[]>(
+      `SELECT id
+       FROM sales_representatives
+       WHERE id = $1::uuid
+         AND status = 'ACTIVE'`,
+      [input.representativeId],
+    );
+    const representativeId = rows[0]?.id;
+    if (!representativeId) {
+      throw new FieldVisitBusinessRuleError("المندوب المحدد غير موجود أو غير نشط.");
+    }
+    return representativeId;
+  }
+
+  const ownRepresentativeId = await requireActiveRepresentativeId(sql, context);
+  if (input.representativeId && input.representativeId !== ownRepresentativeId) {
     throw new AuthorizationError();
   }
-  const rows = await sql.unsafe<{ representative_id: string }[]>(
-    `SELECT plan.representative_id
-     FROM daily_plan_items AS item
-     JOIN daily_plans AS plan ON plan.id = item.plan_id
-     WHERE item.id = $1::uuid
-       AND ($2::uuid IS NULL OR plan.id = $2::uuid)`,
-    [input.planItemId, input.planId ?? null],
-  );
-  const representativeId = rows[0]?.representative_id;
-  if (!representativeId) throw new AuthorizationError();
-  return representativeId;
+  return ownRepresentativeId;
 }
 
 async function requireActiveRepresentativeId(
