@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   static:
-    name: Lint, typecheck, and unit tests
+    name: Lint, dual typecheck, and unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 12
 
@@ -43,12 +43,20 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
+      - name: Typecheck with TypeScript 7
         run: |
           set +e
           npm run typecheck -- --pretty false > typecheck.log 2>&1
           code=$?
           echo "${code}" > typecheck.exit
+          exit 0
+
+      - name: Typecheck with TypeScript 6 compatibility API
+        run: |
+          set +e
+          npm run typecheck:compat -- --pretty false > typecheck-compat.log 2>&1
+          code=$?
+          echo "${code}" > typecheck-compat.exit
           exit 0
 
       - name: Unit tests
@@ -67,6 +75,8 @@ jobs:
           path: |
             typecheck.log
             typecheck.exit
+            typecheck-compat.log
+            typecheck-compat.exit
             unit-tests.log
             unit-tests.exit
           if-no-files-found: error
@@ -75,9 +85,11 @@ jobs:
       - name: Enforce check results
         run: |
           typecheck_code="$(cat typecheck.exit)"
+          compatibility_code="$(cat typecheck-compat.exit)"
           unit_code="$(cat unit-tests.exit)"
-          if [ "${typecheck_code}" != "0" ] || [ "${unit_code}" != "0" ]; then
+          if [ "${typecheck_code}" != "0" ] || [ "${compatibility_code}" != "0" ] || [ "${unit_code}" != "0" ]; then
             cat typecheck.log
+            cat typecheck-compat.log
             cat unit-tests.log
             exit 1
           fi
