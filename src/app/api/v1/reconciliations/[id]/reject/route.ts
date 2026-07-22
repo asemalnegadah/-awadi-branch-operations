@@ -11,7 +11,7 @@ export async function POST(request: NextRequest, routeContext: RouteContext) {
   return handleReconciliationTransition(
     request,
     id,
-    "reconciliations.review",
+    ["reconciliations.review", "reconciliations.approve"],
     rejectReconciliation,
   );
 }
