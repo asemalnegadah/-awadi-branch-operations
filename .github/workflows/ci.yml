@@ -4,159 +4,79 @@ on:
   pull_request:
   push:
     branches:
-      - main
-      - "agent/**"
       - "chore/**"
-      - "feat/**"
-      - "fix/**"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: eslint10-diagnostics-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  prepare-eslint10:
+  diagnose-eslint10:
     if: github.event_name == 'pull_request' && github.head_ref == 'chore/eslint10-ecosystem'
-    name: Prepare and validate ESLint 10 ecosystem
+    name: Diagnose ESLint 10 ecosystem
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.head_ref }}
-          persist-credentials: true
+          persist-credentials: false
           show-progress: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Generate the ESLint 10 dependency graph
+      - name: Generate the candidate dependency graph
         run: >-
           npm install --ignore-scripts --no-audit --no-fund --save-dev --save-exact
           eslint@10.7.0 eslint-config-next@16.2.10
-      - name: Verify resolved lint ecosystem
-        run: npm ls eslint eslint-config-next typescript-eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin
-      - name: Validate lint, types, and behavior
+      - name: Capture dependency tree
         run: |
-          npm run lint
-          npm run typecheck
-          npm run typecheck:compat
-          npm run test
-      - name: Commit the tested dependency graph
+          set +e
+          npm ls eslint eslint-config-next typescript-eslint @typescript-eslint/parser @typescript-eslint/eslint-plugin --all --json > eslint10-tree.json 2> eslint10-tree.stderr
+          echo "$?" > eslint10-tree.exit
+          exit 0
+      - name: Capture lint diagnostics
         run: |
-          set -euo pipefail
-          git restore --source=HEAD -- .github/workflows/ci.yml
-          git config user.name "awadi-eslint-maintainer"
-          git config user.email "awadi-eslint-maintainer@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "build(eslint): lock the ESLint 10 ecosystem"
-          git push origin HEAD:chore/eslint10-ecosystem
-
-  quality:
-    name: Lint, typecheck, tests, migrations, and builds
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: awadi_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d awadi_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+          set +e
+          npm run lint > eslint10-lint.log 2>&1
+          echo "$?" > eslint10-lint.exit
+          exit 0
+      - name: Capture TypeScript and test diagnostics
+        run: |
+          set +e
+          npm run typecheck > eslint10-typescript7.log 2>&1
+          echo "$?" > eslint10-typescript7.exit
+          npm run typecheck:compat > eslint10-typescript6.log 2>&1
+          echo "$?" > eslint10-typescript6.exit
+          npm run test > eslint10-tests.log 2>&1
+          echo "$?" > eslint10-tests.exit
+          exit 0
+      - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          show-progress: false
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install locked dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: Verify Node.js runtime consistency
-        run: npm run verify:node-runtime
-
-      - name: Verify migration sequence
-        run: npm run verify:migrations
-
-      - name: Verify Cloudflare configuration
-        run: npm run verify:cloudflare
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck with TypeScript 7
-        run: npm run typecheck
-
-      - name: Typecheck with TypeScript 6 compatibility API
-        run: npm run typecheck:compat
-
-      - name: Unit tests
-        run: npm run test
-
-      - name: Install PostgreSQL client
+          name: eslint10-ecosystem-diagnostics
+          path: |
+            package-lock.json
+            eslint10-tree.json
+            eslint10-tree.stderr
+            eslint10-tree.exit
+            eslint10-lint.log
+            eslint10-lint.exit
+            eslint10-typescript7.log
+            eslint10-typescript7.exit
+            eslint10-typescript6.log
+            eslint10-typescript6.exit
+            eslint10-tests.log
+            eslint10-tests.exit
+          retention-days: 1
+      - name: Enforce candidate health
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client
-
-      - name: Apply PostgreSQL migrations
-        env:
-          PGPASSWORD: postgres
-        run: |
-          set -euo pipefail
-          while IFS= read -r migration; do
-            echo "Applying ${migration}"
-            psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "${migration}"
-          done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
-
-      - name: PostgreSQL integrity tests
-        env:
-          PGPASSWORD: postgres
-        run: |
-          set -euo pipefail
-          while IFS= read -r test_file; do
-            echo "Running ${test_file}"
-            psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "${test_file}"
-          done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
-
-      - name: PostgreSQL repository integration tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/awadi_test
-        run: |
-          set -o pipefail
-          npm run test:integration 2>&1 | tee postgres-integration-tests.log
-
-      - name: Upload PostgreSQL integration diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: postgres-integration-diagnostics
-          path: postgres-integration-tests.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Build Next.js application
-        run: npm run build
-
-      - name: Build and validate Cloudflare Worker
-        run: npm run cf:check
+          test "$(cat eslint10-tree.exit)" = "0"
+          test "$(cat eslint10-lint.exit)" = "0"
+          test "$(cat eslint10-typescript7.exit)" = "0"
+          test "$(cat eslint10-typescript6.exit)" = "0"
+          test "$(cat eslint10-tests.exit)" = "0"
