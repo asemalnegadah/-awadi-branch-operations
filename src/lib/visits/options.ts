@@ -17,11 +17,17 @@ export interface FieldVisitCustomerOption {
   readonly number: string | null;
 }
 
+export interface FieldVisitRepresentativeOption {
+  readonly id: string;
+  readonly name: string;
+  readonly employeeCode: string;
+}
+
 export async function getFieldVisitFormOptionsPostgres(
   sql: Sql,
   representativeScopeId?: string,
 ) {
-  const [planRows, customerRows] = await Promise.all([
+  const [planRows, customerRows, representativeRows] = await Promise.all([
     sql.unsafe<{
       id: string;
       plan_id: string;
@@ -43,6 +49,7 @@ export async function getFieldVisitFormOptionsPostgres(
        JOIN sales_representatives AS representative ON representative.id = plan.representative_id
        WHERE plan.state IN ('APPROVED', 'IN_PROGRESS')
          AND plan.plan_date = (now() AT TIME ZONE 'Asia/Aden')::date
+         AND representative.status = 'ACTIVE'
          AND ($1::uuid IS NULL OR plan.representative_id = $1::uuid)
          AND NOT EXISTS (
            SELECT 1 FROM field_visits AS visit
@@ -72,6 +79,14 @@ export async function getFieldVisitFormOptionsPostgres(
        LIMIT 500`,
       [representativeScopeId ?? null],
     ),
+    sql.unsafe<{ id: string; name: string; employee_code: string }[]>(
+      `SELECT id, full_name_ar AS name, employee_code
+       FROM sales_representatives
+       WHERE status = 'ACTIVE'
+         AND ($1::uuid IS NULL OR id = $1::uuid)
+       ORDER BY full_name_ar, id`,
+      [representativeScopeId ?? null],
+    ),
   ]);
   return Object.freeze({
     planItems: Object.freeze(planRows.map((row) => Object.freeze({
@@ -88,6 +103,11 @@ export async function getFieldVisitFormOptionsPostgres(
       id: row.id,
       name: row.name,
       number: row.number,
+    }))),
+    representatives: Object.freeze(representativeRows.map((row) => Object.freeze({
+      id: row.id,
+      name: row.name,
+      employeeCode: row.employee_code,
     }))),
   });
 }
