@@ -371,8 +371,9 @@ export async function settleReconciliationPostgres(
   context: ReconciliationCommandContext,
 ): Promise<ReconciliationMutationResult> {
   if (!input.reason) throw new ReconciliationBusinessRuleError("سبب التسوية إلزامي.");
+  const settlementReason = input.reason;
   return sql.begin(async (transaction) => {
-    await setRequestContext(transaction, context, input.reason);
+    await setRequestContext(transaction, context, settlementReason);
     const locked = await lockCase(transaction, reconciliationId);
     const payload = canonicalTransitionPayload(input);
     if (await commandReplay(transaction, reconciliationId, "SETTLE", payload, context)) {
@@ -417,7 +418,7 @@ export async function settleReconciliationPostgres(
         locked.currency_code,
         direction,
         amountMinor,
-        input.reason,
+        settlementReason,
         reconciliationId,
         `reconciliation-ledger:${context.idempotencyKey}`,
         context.actor.id,
@@ -445,7 +446,7 @@ export async function settleReconciliationPostgres(
         context.actor.id,
         context.idempotencyKey,
         context.request.requestId,
-        input.reason,
+        settlementReason,
       ],
     );
 
@@ -469,7 +470,7 @@ export async function settleReconciliationPostgres(
       ledgerEntryId,
       direction,
       amountMinor,
-    }, input.reason);
+    }, settlementReason);
     return Object.freeze({ reconciliation: result, replayed: false });
   });
 }
@@ -518,7 +519,7 @@ function transitionUpdate(
   locked: CaseLockRow,
   input: ReconciliationTransitionInput,
   actorId: string,
-): { readonly sql: string; readonly parameters: readonly unknown[]; readonly targetState: ReconciliationState } {
+): { readonly sql: string; readonly parameters: readonly (string | number)[]; readonly targetState: ReconciliationState } {
   const state = parseState(locked.state);
   switch (operation) {
     case "SUBMIT": {
@@ -536,6 +537,9 @@ function transitionUpdate(
     }
     case "REVIEW":
       if (state !== "PENDING_REVIEW") throw new ReconciliationConflictError("المطابقة ليست بانتظار المراجعة.");
+      if (!input.reasonCode || !input.reasonText) {
+        throw new ReconciliationBusinessRuleError("مراجعة الفرق تتطلب تصنيف السبب ووصفه.");
+      }
       return {
         sql: "state = 'REVIEWED', reviewed_by = $3::uuid, reviewed_at = now(), reason_code = $4, reason_text = $5, updated_by = $3::uuid",
         parameters: [actorId, input.reasonCode, input.reasonText],
@@ -559,6 +563,7 @@ function transitionUpdate(
       if (state !== "PENDING_REVIEW" && state !== "PENDING_APPROVAL") {
         throw new ReconciliationConflictError("لا يمكن إرجاع المطابقة من حالتها الحالية.");
       }
+      if (!input.reason) throw new ReconciliationBusinessRuleError("سبب الإرجاع إلزامي.");
       return {
         sql: "state = 'RETURNED', returned_by = $3::uuid, returned_at = now(), return_reason = $4, updated_by = $3::uuid",
         parameters: [actorId, input.reason],
@@ -568,6 +573,7 @@ function transitionUpdate(
       if (state !== "PENDING_REVIEW" && state !== "PENDING_APPROVAL") {
         throw new ReconciliationConflictError("لا يمكن رفض المطابقة من حالتها الحالية.");
       }
+      if (!input.reason) throw new ReconciliationBusinessRuleError("سبب الرفض إلزامي.");
       return {
         sql: "state = 'REJECTED', rejected_by = $3::uuid, rejected_at = now(), rejection_reason = $4, updated_by = $3::uuid",
         parameters: [actorId, input.reason],
