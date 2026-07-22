@@ -9,6 +9,7 @@ export const reconciliationStates = [
   "APPROVED",
   "RETURNED",
   "REJECTED",
+  "MATCHED",
   "SETTLED",
 ] as const;
 export type ReconciliationState = (typeof reconciliationStates)[number];
@@ -78,7 +79,16 @@ export interface ReconciliationRecord {
 
 export interface ReconciliationEvent {
   readonly id: string;
-  readonly eventType: "CREATED" | "SUBMITTED" | "REVIEWED" | "PENDING_APPROVAL" | "APPROVED" | "RETURNED" | "REJECTED" | "SETTLED";
+  readonly eventType:
+    | "CREATED"
+    | "SUBMITTED"
+    | "REVIEWED"
+    | "PENDING_APPROVAL"
+    | "APPROVED"
+    | "RETURNED"
+    | "REJECTED"
+    | "MATCHED"
+    | "SETTLED";
   readonly fromState: ReconciliationState | null;
   readonly toState: ReconciliationState;
   readonly actorUserId: string;
