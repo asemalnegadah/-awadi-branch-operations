@@ -104,17 +104,20 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          set -euo pipefail
-          while IFS= read -r test_file; do
-            echo "Running ${test_file}"
-            psql \
-              --host localhost \
-              --port 5432 \
-              --username postgres \
-              --dbname awadi_test \
-              --set ON_ERROR_STOP=1 \
-              --file "${test_file}"
-          done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
+          set -o pipefail
+          (
+            set -euo pipefail
+            while IFS= read -r test_file; do
+              echo "Running ${test_file}"
+              psql \
+                --host localhost \
+                --port 5432 \
+                --username postgres \
+                --dbname awadi_test \
+                --set ON_ERROR_STOP=1 \
+                --file "${test_file}"
+            done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
+          ) 2>&1 | tee postgres-integrity-tests.log
 
       - name: PostgreSQL repository integration tests
         env:
@@ -130,6 +133,7 @@ jobs:
           name: postgres-diagnostics
           path: |
             migration.log
+            postgres-integrity-tests.log
             postgres-integration-tests.log
           if-no-files-found: warn
           retention-days: 7
