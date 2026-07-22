@@ -162,7 +162,7 @@ describe.sequential("PostgreSQL reconciliation vertical slice", () => {
       settled.reconciliation.settlementLedgerEntryId,
     );
 
-    const ledgerRows = await sql<[{ count: number; amount_minor: number; direction: string }]>
+    const ledgerRows = await sql<[{ count: number; amount_minor: number; direction: string }]>`
       SELECT COUNT(*)::int AS count, MIN(amount_minor)::int AS amount_minor, MIN(direction) AS direction
       FROM customer_ledger_entries
       WHERE source_type = 'RECONCILIATION' AND source_id = ${created.reconciliation.id}
@@ -222,7 +222,7 @@ describe.sequential("PostgreSQL reconciliation vertical slice", () => {
     expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
     expect(first.reconciliation.settlementLedgerEntryId).toBe(second.reconciliation.settlementLedgerEntryId);
 
-    const ledgerRows = await sql<[{ count: number; direction: string }]>
+    const ledgerRows = await sql<[{ count: number; direction: string }]>`
       SELECT COUNT(*)::int AS count, MIN(direction) AS direction
       FROM customer_ledger_entries
       WHERE source_type = 'RECONCILIATION' AND source_id = ${created.reconciliation.id}
