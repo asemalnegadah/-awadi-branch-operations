@@ -7,84 +7,50 @@ on:
       - "chore/**"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: typescript7-diagnostics-${{ github.ref }}
+  group: typescript7-lock-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  diagnose-typescript7:
+  lock-typescript7:
     if: github.event_name == 'pull_request' && github.head_ref == 'chore/typescript7-dual-toolchain'
-    name: Diagnose TypeScript 7 dual toolchain
+    name: Lock verified TypeScript 7 dual toolchain
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
-          persist-credentials: false
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
           show-progress: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
-      - name: Generate the dual TypeScript lockfile
+      - name: Generate the verified dependency graph
         run: >-
           npm install --ignore-scripts --no-audit --no-fund --save-dev --save-exact
           typescript@npm:@typescript/typescript6@6.0.2
           @typescript/native@npm:typescript@7.0.2
           @typescript/typescript6@6.0.2
-      - name: Capture TypeScript 7 diagnostics
-        id: native
+      - name: Revalidate before committing
         run: |
-          set +e
-          npm run typecheck -- --pretty false > typescript7.log 2>&1
-          code=$?
-          cat typescript7.log
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Capture TypeScript 6 compatibility diagnostics
-        id: compat
+          npm run typecheck
+          npm run typecheck:compat
+          npm run lint
+          npm run test
+      - name: Commit the locked dependency graph
         run: |
-          set +e
-          npm run typecheck:compat -- --pretty false > typescript6.log 2>&1
-          code=$?
-          cat typescript6.log
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Capture ESLint diagnostics
-        id: lint
-        run: |
-          set +e
-          npm run lint > eslint.log 2>&1
-          code=$?
-          cat eslint.log
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Capture unit-test diagnostics
-        id: tests
-        run: |
-          set +e
-          npm run test > unit-tests.log 2>&1
-          code=$?
-          cat unit-tests.log
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          exit 0
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: typescript7-dual-toolchain-diagnostics
-          path: |
-            package-lock.json
-            typescript7.log
-            typescript6.log
-            eslint.log
-            unit-tests.log
-          retention-days: 1
-      - name: Enforce validation results
-        run: |
-          test "${{ steps.native.outputs.code }}" = "0"
-          test "${{ steps.compat.outputs.code }}" = "0"
-          test "${{ steps.lint.outputs.code }}" = "0"
-          test "${{ steps.tests.outputs.code }}" = "0"
+          set -euo pipefail
+          git config user.name "awadi-typescript-maintainer"
+          git config user.email "awadi-typescript-maintainer@users.noreply.github.com"
+          git add package.json package-lock.json tsconfig.json
+          if git diff --cached --quiet; then
+            echo "The verified dependency graph is already committed."
+            exit 0
+          fi
+          git commit -m "build(ts): lock TypeScript 7 and TypeScript 6 compatibility toolchains"
+          git push origin HEAD:chore/typescript7-dual-toolchain
