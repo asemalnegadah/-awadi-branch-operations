@@ -52,12 +52,58 @@ jobs:
               )
               path.write_text(updated)
           PY
-      - name: Verify runtime inventory and project behavior
+      - name: Capture Node runtime verification
+        id: runtime
         run: |
-          npm run verify:node-runtime
-          npm run lint
-          npm run typecheck
-          npm run test
+          set +e
+          npm run verify:node-runtime > node-runtime-verification.log 2>&1
+          code=$?
+          cat node-runtime-verification.log
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Capture lint verification
+        id: lint
+        run: |
+          set +e
+          npm run lint > node-runtime-lint.log 2>&1
+          code=$?
+          cat node-runtime-lint.log
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Capture TypeScript verification
+        id: types
+        run: |
+          set +e
+          npm run typecheck -- --pretty false > node-runtime-typecheck.log 2>&1
+          code=$?
+          cat node-runtime-typecheck.log
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Capture unit tests
+        id: tests
+        run: |
+          set +e
+          npm run test > node-runtime-tests.log 2>&1
+          code=$?
+          cat node-runtime-tests.log
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: node24-runtime-diagnostics
+          path: |
+            node-runtime-verification.log
+            node-runtime-lint.log
+            node-runtime-typecheck.log
+            node-runtime-tests.log
+          retention-days: 1
+      - name: Enforce verification results
+        run: |
+          test "${{ steps.runtime.outputs.code }}" = "0"
+          test "${{ steps.lint.outputs.code }}" = "0"
+          test "${{ steps.types.outputs.code }}" = "0"
+          test "${{ steps.tests.outputs.code }}" = "0"
       - name: Restore canonical CI shape with Node.js 24 and commit
         run: |
           set -euo pipefail
