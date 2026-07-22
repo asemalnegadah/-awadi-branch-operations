@@ -6,20 +6,23 @@ import { useMemo, useState } from "react";
 import type {
   FieldVisitCustomerOption,
   FieldVisitPlanItemOption,
+  FieldVisitRepresentativeOption,
 } from "@/lib/visits/options";
 
 interface Props {
   readonly planItems: readonly FieldVisitPlanItemOption[];
   readonly customers: readonly FieldVisitCustomerOption[];
+  readonly representatives: readonly FieldVisitRepresentativeOption[];
 }
 
-export function CreateVisitForm({ planItems, customers }: Props) {
+export function CreateVisitForm({ planItems, customers, representatives }: Props) {
   const router = useRouter();
   const [mode, setMode] = useState<"PLAN" | "OUT_OF_PLAN">(
     planItems.length > 0 ? "PLAN" : "OUT_OF_PLAN",
   );
   const [planItemId, setPlanItemId] = useState(planItems[0]?.id ?? "");
   const [customerId, setCustomerId] = useState(customers[0]?.id ?? "");
+  const [representativeId, setRepresentativeId] = useState(representatives[0]?.id ?? "");
   const [visitType, setVisitType] = useState("MIXED");
   const [objective, setObjective] = useState(planItems[0]?.objective ?? "");
   const [reason, setReason] = useState("");
@@ -54,6 +57,7 @@ export function CreateVisitForm({ planItems, customers }: Props) {
           }
         : {
             customerId,
+            representativeId,
             visitType,
             objective,
             outOfPlanReason: reason,
@@ -83,6 +87,8 @@ export function CreateVisitForm({ planItems, customers }: Props) {
     }
   }
 
+  const outOfPlanUnavailable = customers.length === 0 || representatives.length === 0;
+
   return (
     <section className="panel">
       <h2>إنشاء زيارة</h2>
@@ -91,7 +97,7 @@ export function CreateVisitForm({ planItems, customers }: Props) {
           <label htmlFor="visit-mode">مصدر الزيارة</label>
           <select id="visit-mode" value={mode} onChange={(event) => setMode(event.target.value as "PLAN" | "OUT_OF_PLAN")}>
             <option value="PLAN" disabled={planItems.length === 0}>من الخطة المعتمدة</option>
-            <option value="OUT_OF_PLAN">خارج الخطة بسبب موثق</option>
+            <option value="OUT_OF_PLAN" disabled={outOfPlanUnavailable}>خارج الخطة بسبب موثق</option>
           </select>
         </div>
         {mode === "PLAN" ? (
@@ -106,16 +112,28 @@ export function CreateVisitForm({ planItems, customers }: Props) {
             </select>
           </div>
         ) : (
-          <div className="promise-field">
-            <label htmlFor="visit-customer">العميل</label>
-            <select id="visit-customer" value={customerId} onChange={(event) => setCustomerId(event.target.value)} required>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}{customer.number ? ` — ${customer.number}` : ""}
-                </option>
-              ))}
-            </select>
-          </div>
+          <>
+            <div className="promise-field">
+              <label htmlFor="visit-representative">المندوب المسؤول</label>
+              <select id="visit-representative" value={representativeId} onChange={(event) => setRepresentativeId(event.target.value)} required>
+                {representatives.map((representative) => (
+                  <option key={representative.id} value={representative.id}>
+                    {representative.name} — {representative.employeeCode}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="promise-field">
+              <label htmlFor="visit-customer">العميل</label>
+              <select id="visit-customer" value={customerId} onChange={(event) => setCustomerId(event.target.value)} required>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}{customer.number ? ` — ${customer.number}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
         )}
         <div className="promise-field">
           <label htmlFor="visit-type">نوع الزيارة</label>
@@ -140,7 +158,11 @@ export function CreateVisitForm({ planItems, customers }: Props) {
           </div>
         ) : null}
         {error ? <p className="form-error" role="alert">{error}</p> : null}
-        <button className="primary-button" type="submit" disabled={submitting || (mode === "PLAN" && !selectedPlanItem)}>
+        <button
+          className="primary-button"
+          type="submit"
+          disabled={submitting || (mode === "PLAN" ? !selectedPlanItem : outOfPlanUnavailable || !representativeId || !customerId)}
+        >
           {submitting ? "جارٍ الإنشاء…" : "إنشاء الزيارة"}
         </button>
       </form>
