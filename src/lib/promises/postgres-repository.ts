@@ -1,4 +1,6 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
+
+type SqlExecutor = Sql | TransactionSql;
 
 import type { CurrencyCode } from "@/lib/domain/currency";
 
@@ -227,7 +229,7 @@ const promiseJoins = `
 `;
 
 export async function getActiveRepresentativeIdByUserPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   userId: string,
 ): Promise<string | null> {
   const rows = await sql.unsafe<{ id: string }[]>(
@@ -372,7 +374,7 @@ export async function createPromisePostgres(
 }
 
 export async function getPromisePostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PaymentPromise | null> {
@@ -408,7 +410,7 @@ export async function getPromiseDetailsPostgres(
 }
 
 export async function listPromisesPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   filters: PromiseListFilters,
   representativeScopeId?: string,
 ): Promise<PromisePage> {
@@ -1329,7 +1331,7 @@ export async function reverseCollectionAllocationPostgres(
 }
 
 export async function getPromiseHistoryPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
 ): Promise<readonly PaymentPromiseEvent[]> {
   const rows = await sql.unsafe<EventRow[]>(
@@ -1360,7 +1362,7 @@ export async function getPromiseHistoryPostgres(
 }
 
 export async function getDuePromisesPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   limit = 100,
   representativeScopeId?: string,
 ): Promise<PromisePage> {
@@ -1372,7 +1374,7 @@ export async function getDuePromisesPostgres(
 }
 
 export async function getOverduePromisesPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   limit = 100,
   representativeScopeId?: string,
 ): Promise<PromisePage> {
@@ -1384,7 +1386,7 @@ export async function getOverduePromisesPostgres(
 }
 
 export async function getCustomerPromiseSummaryPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   customerId: string,
   representativeScopeId?: string,
 ): Promise<CustomerPromiseSummary | null> {
@@ -1413,7 +1415,7 @@ export async function getCustomerPromiseSummaryPostgres(
 }
 
 export async function getSalespersonPromiseSummaryPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   representativeId: string,
   representativeScopeId?: string,
 ): Promise<SalespersonPromiseSummary | null> {
@@ -1438,7 +1440,7 @@ export async function getSalespersonPromiseSummaryPostgres(
 }
 
 export async function getPromiseDashboardSummaryPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   representativeScopeId?: string,
 ): Promise<readonly CurrencyPromiseSummary[]> {
   return Object.freeze(
@@ -1453,7 +1455,7 @@ export async function getPromiseDashboardSummaryPostgres(
 }
 
 export async function getPromiseFormOptionsPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   representativeScopeId?: string,
 ): Promise<PromiseFormOptions> {
   const accountParameters: SqlParameter[] = [];
@@ -1526,7 +1528,7 @@ export async function getPromiseFormOptionsPostgres(
 }
 
 export async function listAvailableConfirmedCollectionsPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<readonly ConfirmedCollectionOption[]> {
@@ -1677,7 +1679,7 @@ async function terminalTransition(
 }
 
 async function findOperationReplay(
-  transaction: Sql,
+  transaction: SqlExecutor,
   promiseId: string,
   eventType: PromiseEventType,
   idempotencyKey: string,
@@ -1721,7 +1723,7 @@ async function findOperationReplay(
 }
 
 async function insertEvent(
-  transaction: Sql,
+  transaction: SqlExecutor,
   input: {
     readonly promiseId: string;
     readonly context: PromiseCommandContext;
@@ -1778,7 +1780,7 @@ async function insertEvent(
 }
 
 async function insertAudit(
-  transaction: Sql,
+  transaction: SqlExecutor,
   context: PromiseCommandContext,
   action: string,
   resourceId: string,
@@ -1825,7 +1827,7 @@ async function insertAudit(
 }
 
 async function insertStatusEventIfChanged(
-  transaction: Sql,
+  transaction: SqlExecutor,
   oldStatus: PromiseBaseStatus,
   promise: PaymentPromise,
   context: PromiseCommandContext,
@@ -1880,7 +1882,7 @@ function specializedEvent(
 }
 
 async function selectPromises(
-  sql: Sql,
+  sql: SqlExecutor,
   suffix: string,
   parameters: readonly SqlParameter[],
 ): Promise<PromiseRow[]> {
@@ -1891,7 +1893,7 @@ async function selectPromises(
 }
 
 async function assertActiveRepresentativeAssignment(
-  sql: Sql,
+  sql: SqlExecutor,
   representativeId: string,
   customerId: string,
 ): Promise<void> {
@@ -1910,7 +1912,7 @@ async function assertActiveRepresentativeAssignment(
 }
 
 async function requirePromiseById(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PaymentPromise> {
@@ -1920,7 +1922,7 @@ async function requirePromiseById(
 }
 
 async function lockPromise(
-  transaction: Sql,
+  transaction: SqlExecutor,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PromiseLockRow> {
@@ -1955,7 +1957,7 @@ async function lockPromise(
 }
 
 async function locklessPromise(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
   representativeScopeId?: string,
 ): Promise<PromiseLockRow | null> {
@@ -1988,7 +1990,7 @@ async function locklessPromise(
 }
 
 async function lockCollection(
-  transaction: Sql,
+  transaction: SqlExecutor,
   collectionId: string,
 ): Promise<CollectionLockRow> {
   const rows = await transaction.unsafe<CollectionLockRow[]>(
@@ -2058,7 +2060,7 @@ const followUpSelect = `
 `;
 
 async function listPromiseFollowUpsPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
 ): Promise<readonly PaymentPromiseFollowUp[]> {
   const rows = await sql.unsafe<FollowUpRow[]>(
@@ -2092,7 +2094,7 @@ const allocationSelect = `
 `;
 
 async function listPromiseAllocationsPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   promiseId: string,
 ): Promise<readonly PaymentPromiseAllocation[]> {
   const rows = await sql.unsafe<AllocationRow[]>(
@@ -2105,7 +2107,7 @@ async function listPromiseAllocationsPostgres(
 }
 
 async function summaryRows(
-  sql: Sql,
+  sql: SqlExecutor,
   condition: string,
   parameters: readonly SqlParameter[],
 ): Promise<SummaryRow[]> {

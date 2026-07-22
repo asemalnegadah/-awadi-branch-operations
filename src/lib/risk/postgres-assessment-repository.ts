@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
+
+type SqlExecutor = Sql | TransactionSql;
 
 import { calculateCreditRisk } from "./scoring";
 import {
@@ -196,7 +198,7 @@ const assessmentSelect = `
 `;
 
 export async function deriveCreditRiskInputPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<DerivedCreditRiskInput> {
@@ -510,7 +512,7 @@ export async function recalculateCreditRiskPostgres(
 }
 
 export async function listCreditRiskAccountsPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   filters: CreditRiskListFilters,
   representativeScopeId?: string,
 ): Promise<CreditRiskPage> {
@@ -667,7 +669,7 @@ export async function listCreditRiskAccountsPostgres(
 }
 
 export async function getAssessmentHistoryPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<readonly CreditRiskAssessment[]> {
@@ -682,7 +684,7 @@ export async function getAssessmentHistoryPostgres(
 }
 
 export async function getCurrentAssessmentPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   customerAccountId: string,
   representativeScopeId?: string,
 ): Promise<CreditRiskAssessment | null> {
@@ -699,7 +701,7 @@ export async function getCurrentAssessmentPostgres(
   return rows[0] ? mapAssessmentRow(rows[0]) : null;
 }
 
-async function requireAssessmentById(sql: Sql, assessmentId: string): Promise<CreditRiskAssessment> {
+async function requireAssessmentById(sql: SqlExecutor, assessmentId: string): Promise<CreditRiskAssessment> {
   const rows = await sql.unsafe<AssessmentRow[]>(
     `${assessmentSelect} WHERE assessment.id = $1::uuid`,
     [assessmentId],
@@ -710,7 +712,7 @@ async function requireAssessmentById(sql: Sql, assessmentId: string): Promise<Cr
 }
 
 async function findAssessmentByIdempotencyKey(
-  sql: Sql,
+  sql: SqlExecutor,
   idempotencyKey: string,
 ): Promise<AssessmentRow | null> {
   const rows = await sql.unsafe<AssessmentRow[]>(
@@ -736,7 +738,7 @@ function assertAssessmentReplay(
 }
 
 async function insertAssessmentAudit(
-  transaction: Sql,
+  transaction: SqlExecutor,
   context: CreditRiskCommandContext,
   assessment: CreditRiskAssessment,
 ): Promise<void> {

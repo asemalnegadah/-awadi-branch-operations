@@ -1,4 +1,6 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
+
+type SqlExecutor = Sql | TransactionSql;
 
 import { DailyPlanNotFoundError } from "./errors";
 import type {
@@ -122,7 +124,7 @@ const planSelect = `
 `;
 
 export async function listDailyPlansPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   filters: DailyPlanListFilters,
   representativeScopeId?: string,
 ): Promise<DailyPlanPage> {
@@ -155,7 +157,7 @@ export async function listDailyPlansPostgres(
 }
 
 export async function getDailyPlanPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   planId: string,
   representativeScopeId?: string,
   lock = false,
@@ -171,7 +173,7 @@ export async function getDailyPlanPostgres(
 }
 
 export async function requireDailyPlanPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   planId: string,
   representativeScopeId?: string,
   lock = false,
@@ -182,7 +184,7 @@ export async function requireDailyPlanPostgres(
 }
 
 export async function getDailyPlanDetailsPostgres(
-  sql: Sql,
+  sql: SqlExecutor,
   planId: string,
   representativeScopeId?: string,
   includeHistory = true,
