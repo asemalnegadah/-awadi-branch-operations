@@ -58,30 +58,21 @@ jobs:
           npm run lint
           npm run typecheck
           npm run test
-      - name: Restore canonical CI shape with Node.js 24 and commit
+      - name: Capture workflow files requiring connector updates
+        run: git diff --name-only -- .github/workflows > node24-workflow-files.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: node24-workflow-inventory
+          path: node24-workflow-files.txt
+          retention-days: 1
+      - name: Commit the tested lockfile without workflow mutations
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          import subprocess
-
-          canonical = subprocess.check_output(
-              ['git', 'show', 'origin/main:.github/workflows/ci.yml'],
-              text=True,
-          )
-          canonical = re.sub(
-              r'(node-version:\s*["\']?)22(?:\.x)?(["\']?)',
-              r'\g<1>24\g<2>',
-              canonical,
-          )
-          Path('.github/workflows/ci.yml').write_text(canonical)
-          PY
+          git restore --source=HEAD -- .github/workflows
           git config user.name "awadi-runtime-maintainer"
           git config user.email "awadi-runtime-maintainer@users.noreply.github.com"
-          git add package.json package-lock.json .nvmrc .node-version scripts/verify-node-runtime.mjs .github/workflows
-          git commit -m "build(node): standardize all toolchains on Node.js 24 LTS"
+          git add package.json package-lock.json .nvmrc .node-version scripts/verify-node-runtime.mjs
+          git commit -m "build(node): lock Node.js 24 runtime dependencies"
           git push origin HEAD:chore/node24-runtime-baseline
 
   quality:
