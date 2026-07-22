@@ -3,9 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import type {
-  ReconciliationReasonCode,
-  ReconciliationState,
+import {
+  reconciliationReasonCodes,
+  type ReconciliationReasonCode,
+  type ReconciliationState,
 } from "@/lib/reconciliations/types";
 
 interface ActionPermissions {
@@ -21,6 +22,8 @@ interface ApiResponse {
 }
 
 type ActionName = "submit" | "review" | "request-approval" | "approve" | "return" | "reject" | "settle";
+
+const reconciliationReasonCodeSet = new Set<string>(reconciliationReasonCodes);
 
 export function ReconciliationActionPanel({
   reconciliationId,
@@ -56,7 +59,7 @@ export function ReconciliationActionPanel({
         },
         body: JSON.stringify(payload),
       });
-      const body = await response.json() as ApiResponse;
+      const body = parseApiResponse(await response.json());
       if (!response.ok || !body.success) {
         throw new Error(body.error?.message ?? "تعذر تنفيذ العملية.");
       }
@@ -85,7 +88,10 @@ export function ReconciliationActionPanel({
           <select
             id="reasonCode"
             value={reasonCode}
-            onChange={(event) => setReasonCode(event.target.value as ReconciliationReasonCode)}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (isReconciliationReasonCode(value)) setReasonCode(value);
+            }}
           >
             <option value="TIMING_DIFFERENCE">فرق توقيت</option>
             <option value="MISSING_COLLECTION">تحصيل غير مثبت</option>
@@ -160,4 +166,21 @@ export function ReconciliationActionPanel({
       ) : null}
     </section>
   );
+}
+
+function isReconciliationReasonCode(value: string): value is ReconciliationReasonCode {
+  return reconciliationReasonCodeSet.has(value);
+}
+
+function parseApiResponse(value: unknown): ApiResponse {
+  if (!value || typeof value !== "object") {
+    return { success: false, error: { message: "استجابة الخادم غير صالحة." } };
+  }
+  const success = Reflect.get(value, "success");
+  const error = Reflect.get(value, "error");
+  const message = error && typeof error === "object" ? Reflect.get(error, "message") : undefined;
+  return {
+    success: success === true,
+    ...(typeof message === "string" ? { error: { message } } : {}),
+  };
 }
