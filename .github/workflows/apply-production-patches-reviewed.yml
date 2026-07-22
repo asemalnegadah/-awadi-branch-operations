@@ -1,3 +1,4 @@
+# Temporary reviewed apply workflow; deletes itself after a successful commit.
 name: Apply reviewed production dependency patches
 
 on:
