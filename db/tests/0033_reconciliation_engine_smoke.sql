@@ -132,9 +132,22 @@ BEGIN
       'محاولة تسوية مكررة يجب رفضها.'
     );
     RAISE EXCEPTION 'expected duplicate settlement to fail';
-  EXCEPTION WHEN unique_violation THEN
-    NULL;
+  EXCEPTION
+    WHEN unique_violation THEN
+      NULL;
+    WHEN raise_exception THEN
+      IF SQLERRM = 'expected duplicate settlement to fail' THEN RAISE; END IF;
+      IF position('only an approved reconciliation can be settled' IN SQLERRM) = 0 THEN
+        RAISE EXCEPTION 'unexpected duplicate settlement error: %', SQLERRM;
+      END IF;
   END;
+
+  SELECT COUNT(*) INTO event_count
+  FROM reconciliation_settlements
+  WHERE reconciliation_id = reconciliation_id_value;
+  IF event_count <> 1 THEN
+    RAISE EXCEPTION 'duplicate settlement attempt changed settlement count to %', event_count;
+  END IF;
 
   BEGIN
     UPDATE reconciliation_events SET reason = 'تعديل غير مسموح'
