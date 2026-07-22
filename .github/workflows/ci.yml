@@ -48,12 +48,15 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Verify Node.js runtime consistency
+        run: npm run verify:node-runtime
 
       - name: Verify migration sequence
         run: npm run verify:migrations
