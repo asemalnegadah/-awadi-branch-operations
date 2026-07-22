@@ -11,13 +11,49 @@ on:
       - "fix/**"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  prepare-typescript7:
+    if: github.event_name == 'pull_request' && github.head_ref == 'chore/typescript7-dual-toolchain'
+    name: Prepare and validate TypeScript 7 dual toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+          show-progress: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Generate the dual TypeScript lockfile
+        run: >-
+          npm install --ignore-scripts --no-audit --no-fund --save-dev --save-exact
+          typescript@npm:@typescript/typescript6@6.0.3
+          @typescript/native@npm:typescript@7.0.2
+      - name: Verify both compiler paths and ecosystem tooling
+        run: |
+          npm run typecheck
+          npm run typecheck:compat
+          npm run lint
+          npm run test
+      - name: Commit the tested dependency graph
+        run: |
+          set -euo pipefail
+          git config user.name "awadi-typescript-maintainer"
+          git config user.email "awadi-typescript-maintainer@users.noreply.github.com"
+          git add package.json package-lock.json tsconfig.json
+          git commit -m "build(ts): lock TypeScript 7 and TypeScript 6 compatibility toolchains"
+          git push origin HEAD:chore/typescript7-dual-toolchain
+
   quality:
     name: Lint, typecheck, tests, migrations, and builds
     runs-on: ubuntu-24.04
@@ -67,8 +103,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
+      - name: Typecheck with TypeScript 7
         run: npm run typecheck
+
+      - name: Typecheck with TypeScript 6 compatibility API
+        run: npm run typecheck:compat
 
       - name: Unit tests
         run: npm run test
@@ -85,13 +124,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r migration; do
             echo "Applying ${migration}"
-            psql \
-              --host localhost \
-              --port 5432 \
-              --username postgres \
-              --dbname awadi_test \
-              --set ON_ERROR_STOP=1 \
-              --file "${migration}"
+            psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "${migration}"
           done < <(find db/migrations -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
 
       - name: PostgreSQL integrity tests
@@ -101,13 +134,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r test_file; do
             echo "Running ${test_file}"
-            psql \
-              --host localhost \
-              --port 5432 \
-              --username postgres \
-              --dbname awadi_test \
-              --set ON_ERROR_STOP=1 \
-              --file "${test_file}"
+            psql --host localhost --port 5432 --username postgres --dbname awadi_test --set ON_ERROR_STOP=1 --file "${test_file}"
           done < <(find db/tests -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
 
       - name: PostgreSQL repository integration tests
