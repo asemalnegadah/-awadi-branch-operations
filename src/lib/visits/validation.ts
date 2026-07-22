@@ -26,6 +26,7 @@ const safeMinorAmount = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
 
 const createSchema = z.object({
   customerId: uuid,
+  representativeId: uuid.nullable().optional(),
   planId: uuid.nullable().optional(),
   planItemId: uuid.nullable().optional(),
   visitType: z.enum(fieldVisitTypes),
@@ -53,6 +54,13 @@ const createSchema = z.object({
       code: "custom",
       path: ["outOfPlanReason"],
       message: "الزيارة المرتبطة بالخطة لا تقبل سببًا خارج الخطة.",
+    });
+  }
+  if (hasPlan && value.representativeId) {
+    context.addIssue({
+      code: "custom",
+      path: ["representativeId"],
+      message: "مندوب الزيارة المرتبطة بالخطة يُستخرج من عنصر الخطة ولا يُرسل يدويًا.",
     });
   }
 });
