@@ -31,7 +31,7 @@ export type ReconciliationTransitionService = (
 export async function handleReconciliationTransition(
   request: NextRequest,
   rawId: string,
-  permission: PermissionCode,
+  permission: PermissionCode | readonly PermissionCode[],
   service: ReconciliationTransitionService,
 ) {
   const authorization = await authorizeReconciliationApiRequest(request, permission, true);
