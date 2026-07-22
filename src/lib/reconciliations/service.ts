@@ -3,6 +3,7 @@ import type { Sql } from "postgres";
 import { hasPermission } from "@/lib/auth/permissions";
 import { AuthorizationError } from "@/lib/auth/types";
 
+import { listReconciliationAccountOptionsPostgres } from "./postgres-options-repository";
 import {
   approveReconciliationPostgres,
   createReconciliationPostgres,
@@ -30,6 +31,15 @@ export async function listReconciliations(
 ) {
   requireReconciliationPermission(context, "reconciliations.read");
   return listReconciliationsPostgres(sql, filters);
+}
+
+export async function listReconciliationAccountOptions(
+  sql: Sql,
+  query: string | undefined,
+  context: ReconciliationReadContext,
+) {
+  requireReconciliationPermission(context, "reconciliations.create");
+  return listReconciliationAccountOptionsPostgres(sql, query);
 }
 
 export async function getReconciliationDetails(
