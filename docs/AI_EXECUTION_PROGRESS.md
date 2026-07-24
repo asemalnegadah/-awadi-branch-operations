@@ -56,3 +56,17 @@
 - **Remaining in this stage:** complete final green CI, inspect review threads, merge PR `#48`, and document PR `#26` as fully superseded by PRs `#46`, `#47`, and `#48`.
 - **Next exact step:** merge PR `#48` with expected-head protection, then begin the reconciliations/discrepancies/settlements vertical slice from the resulting `main`.
 - **External blocker:** ESLint 10 adoption is blocked by the current stable Next.js lint plugin ecosystem; this does not block the project because the latest compatible ESLint 9 line is maintained and fully validated.
+
+## 2026-07-24 18:26 Asia/Aden
+
+- **Branch:** `feature/reconciliation-engine`
+- **Pull request:** `#50` (draft)
+- **Verified HEAD before this progress update:** `2656d2d48f5f1dc7fcc94045aa310ec661172d64`
+- **Completed verification:** PR is open, draft, mergeable, has no submitted reviews, no unresolved review threads, and no PR comments.
+- **Checks on verified HEAD:** Secret Scan passed; Static and unit checks passed; CodeQL passed; main CI failed only at PostgreSQL Repository Integration Tests. Clean dependency installation, Node runtime consistency, migration sequence, Cloudflare configuration, ESLint, TypeScript 7, TypeScript 6 compatibility, unit tests, all PostgreSQL migrations, and PostgreSQL integrity tests passed before the failure.
+- **First actual failure:** all three reconciliation repository integration tests fail while creating a reconciliation with nullable `reason_code` and `reason_text`; PostgreSQL reports `could not determine data type of parameter $11`.
+- **Root cause:** nullable create parameters `$11` and `$12` are untyped in the `INSERT INTO reconciliation_cases` statement.
+- **Fix in progress:** trigger the existing exact one-time branch autofix to apply `$11::text` and `$12::text`, then re-run the full CI set on the resulting HEAD.
+- **Remaining:** verify the generated commit, remove the temporary autofix workflow, complete full green CI and builds, perform final self-review, mark PR ready, merge with expected-head protection, verify `main`, and continue with cash custody and daily closing.
+- **Next exact step:** confirm that the branch autofix creates the typed SQL commit, then inspect the new HEAD and CI results only.
+- **External blockers:** none currently.
