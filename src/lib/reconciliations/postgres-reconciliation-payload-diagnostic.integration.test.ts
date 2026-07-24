@@ -41,7 +41,7 @@ afterAll(async () => {
 });
 
 describe("reconciliation create payload diagnostic", () => {
-  it("prints the stored and requested canonical payloads", async () => {
+  it("prints exact PostgreSQL jsonb differences", async () => {
     const request: RequestSecurityContext = {
       requestId: randomUUID(),
       ipAddress: "127.0.0.1",
@@ -76,14 +76,56 @@ describe("reconciliation create payload diagnostic", () => {
       reasonText: null,
       createdBy: actorId,
     };
-    const rows = await sql<{ create_payload: unknown; matches: boolean }[]>`
-      SELECT create_payload, create_payload = ${JSON.stringify(expected)}::jsonb AS matches
-      FROM reconciliation_cases
-      WHERE id = ${created.reconciliation.id}
-    `;
-    console.log("RECONCILIATION_STORED_PAYLOAD", JSON.stringify(rows[0]?.create_payload));
-    console.log("RECONCILIATION_EXPECTED_PAYLOAD", JSON.stringify(expected));
-    console.log("RECONCILIATION_PAYLOAD_MATCHES", rows[0]?.matches);
+    const expectedJson = JSON.stringify(expected);
+    const summaries = await sql.unsafe<{
+      stored_text: string;
+      expected_text: string;
+      matches: boolean;
+      stored_md5: string;
+      expected_md5: string;
+    }[]>(
+      `
+        SELECT
+          create_payload::text AS stored_text,
+          $2::jsonb::text AS expected_text,
+          create_payload = $2::jsonb AS matches,
+          md5(create_payload::text) AS stored_md5,
+          md5($2::jsonb::text) AS expected_md5
+        FROM reconciliation_cases
+        WHERE id = $1::uuid
+      `,
+      [created.reconciliation.id, expectedJson],
+    );
+    const differences = await sql.unsafe<{
+      key: string;
+      stored_value: unknown;
+      expected_value: unknown;
+      stored_type: string | null;
+      expected_type: string | null;
+      value_matches: boolean;
+      stored_hex: string | null;
+      expected_hex: string | null;
+    }[]>(
+      `
+        SELECT
+          keys.key,
+          reconciliation.create_payload -> keys.key AS stored_value,
+          $2::jsonb -> keys.key AS expected_value,
+          jsonb_typeof(reconciliation.create_payload -> keys.key) AS stored_type,
+          jsonb_typeof($2::jsonb -> keys.key) AS expected_type,
+          (reconciliation.create_payload -> keys.key) = ($2::jsonb -> keys.key) AS value_matches,
+          encode(convert_to((reconciliation.create_payload -> keys.key)::text, 'UTF8'), 'hex') AS stored_hex,
+          encode(convert_to(($2::jsonb -> keys.key)::text, 'UTF8'), 'hex') AS expected_hex
+        FROM reconciliation_cases AS reconciliation
+        CROSS JOIN LATERAL jsonb_object_keys(reconciliation.create_payload || $2::jsonb) AS keys(key)
+        WHERE reconciliation.id = $1::uuid
+        ORDER BY keys.key
+      `,
+      [created.reconciliation.id, expectedJson],
+    );
+
+    console.log("RECONCILIATION_PAYLOAD_SUMMARY", JSON.stringify(summaries[0]));
+    console.log("RECONCILIATION_PAYLOAD_DIFFERENCES", JSON.stringify(differences.filter((row) => !row.value_matches)));
     throw new Error("intentional canonical payload diagnostic; remove after root-cause repair");
   });
 });
