@@ -14,7 +14,6 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 const nextModules = [
-  "مطابقة الحسابات والفوارق",
   "تسليم النقدية والإغلاق اليومي",
   "المخزون والتشغيلات والانتهاء",
   "المركبات والوقود والصيانة",
@@ -90,6 +89,14 @@ export default async function DashboardPage() {
             <h2>المخاطر والمنع الائتماني</h2>
             <p>تقييم قابل للتفسير لكل حساب وعملة، وقرارات منع واستثناءات باعتماد وتدقيق.</p>
             <Link className="primary-button button-link" href="/risk">فتح وحدة المخاطر</Link>
+          </article>
+        ) : null}
+
+        {session.user.permissions.has("reconciliations.read") ? (
+          <article className="panel">
+            <h2>المطابقات والفروقات والتسويات</h2>
+            <p>مقارنة المصادر المالية، تصنيف الفروق، واعتماد قيد التسوية دون حذف التاريخ.</p>
+            <Link className="primary-button button-link" href="/reconciliations">فتح وحدة المطابقات</Link>
           </article>
         ) : null}
 

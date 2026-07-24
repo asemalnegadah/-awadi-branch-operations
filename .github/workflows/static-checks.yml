@@ -41,7 +41,12 @@ jobs:
         run: npm run verify:migrations
 
       - name: Lint
-        run: npm run lint
+        run: |
+          set +e
+          npm run lint > lint.log 2>&1
+          code=$?
+          echo "${code}" > lint.exit
+          exit 0
 
       - name: Typecheck with TypeScript 7
         run: |
@@ -73,6 +78,8 @@ jobs:
         with:
           name: static-unit-diagnostics
           path: |
+            lint.log
+            lint.exit
             typecheck.log
             typecheck.exit
             typecheck-compat.log
@@ -84,10 +91,12 @@ jobs:
 
       - name: Enforce check results
         run: |
+          lint_code="$(cat lint.exit)"
           typecheck_code="$(cat typecheck.exit)"
           compatibility_code="$(cat typecheck-compat.exit)"
           unit_code="$(cat unit-tests.exit)"
-          if [ "${typecheck_code}" != "0" ] || [ "${compatibility_code}" != "0" ] || [ "${unit_code}" != "0" ]; then
+          if [ "${lint_code}" != "0" ] || [ "${typecheck_code}" != "0" ] || [ "${compatibility_code}" != "0" ] || [ "${unit_code}" != "0" ]; then
+            cat lint.log
             cat typecheck.log
             cat typecheck-compat.log
             cat unit-tests.log
