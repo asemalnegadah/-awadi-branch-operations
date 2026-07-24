@@ -207,7 +207,7 @@ export async function createReconciliationPostgres(
     if (!inserted[0]) {
       const existing = await transaction.unsafe<ExistingCreateRow[]>(
         `
-          SELECT id, create_payload = $2::jsonb AS payload_matches
+          SELECT id, create_payload = $2::text::jsonb AS payload_matches
           FROM reconciliation_cases
           WHERE idempotency_key = $1
           FOR UPDATE
@@ -607,7 +607,7 @@ async function commandReplay(
 ): Promise<boolean> {
   const rows = await transaction.unsafe<CommandRow[]>(
     `
-      SELECT reconciliation_id, operation, canonical_payload = $2::jsonb AS payload_matches
+      SELECT reconciliation_id, operation, canonical_payload = $2::text::jsonb AS payload_matches
       FROM reconciliation_commands
       WHERE idempotency_key = $1
       FOR UPDATE
@@ -639,7 +639,7 @@ async function recordCommand(
       INSERT INTO reconciliation_commands (
         reconciliation_id, operation, canonical_payload, result_state,
         actor_user_id, idempotency_key, request_id
-      ) VALUES ($1::uuid, $2, $3::jsonb, $4, $5::uuid, $6, $7::uuid)
+      ) VALUES ($1::uuid, $2, $3::text::jsonb, $4, $5::uuid, $6, $7::uuid)
     `,
     [
       reconciliationId,
@@ -749,7 +749,7 @@ async function insertAudit(
       ) VALUES (
         $1::uuid, 'USER', $2, 'RECONCILIATION', $3,
         $4::uuid, $5, $6::inet, $7, $8,
-        $9::jsonb, $10::jsonb, 'SUCCESS',
+        $9::text::jsonb, $10::text::jsonb, 'SUCCESS',
         jsonb_build_object('idempotencyKey', $11::text)
       )
     `,
