@@ -57,18 +57,27 @@
 - **Next exact step:** merge PR `#48` with expected-head protection, then begin the reconciliations/discrepancies/settlements vertical slice from the resulting `main`.
 - **External blocker:** ESLint 10 adoption is blocked by the current stable Next.js lint plugin ecosystem; this does not block the project because the latest compatible ESLint 9 line is maintained and fully validated.
 
-## 2026-07-24 18:26 Asia/Aden
+## 2026-07-24 19:02 Asia/Aden
 
 - **Branch:** `feature/reconciliation-engine`
-- **Pull request:** `#50` (draft)
-- **Verified HEAD before this progress update:** `2656d2d48f5f1dc7fcc94045aa310ec661172d64`
-- **Completed verification:** PR is open, draft, mergeable, has no submitted reviews, no unresolved review threads, and no PR comments.
-- **Checks on verified HEAD:** Secret Scan passed; Static and unit checks passed; CodeQL passed; main CI failed only at PostgreSQL Repository Integration Tests. Clean dependency installation, Node runtime consistency, migration sequence, Cloudflare configuration, ESLint, TypeScript 7, TypeScript 6 compatibility, unit tests, all PostgreSQL migrations, and PostgreSQL integrity tests passed before the failure.
-- **First actual failure:** all three reconciliation repository integration tests fail while creating a reconciliation; PostgreSQL reports `could not determine data type of parameter $11`.
-- **Initial localization:** nullable `reason_code` and `reason_text` parameters were untyped in the reconciliation insert.
-- **Completed root-cause review:** polymorphic `jsonb_build_object` calls also contained untyped metadata parameters in audit and settlement inserts, so fixing only the nullable reason fields would have exposed later failures.
-- **Repair commit:** `38127d4133ae5091647fe3dd4f319e47f6b62e8d` adds explicit `text` and `uuid` casts at all three affected query sites and removes all temporary export/autofix machinery.
-- **Workflow hygiene:** canonical CI is restored with read-only repository contents permission.
-- **Remaining:** run every required check on a normal owner-authored HEAD, inspect final review state, mark PR ready, merge with expected-head protection, verify `main`, and continue with cash custody and daily closing.
-- **Next exact step:** validate the complete CI, build, security, and PostgreSQL suite on the next HEAD only.
-- **External blockers:** none currently.
+- **Pull request:** `#50` (draft at the time of this record)
+- **Base main commit:** `129b19c06995800add43f362cc80bb19fd8c539a`
+- **Validated implementation and test HEAD:** `3dc37420df710e858dc33dc5186ea8fbe87fbeb9`
+- **Completed:** governed reconciliation, discrepancy classification, approval, exactly-once settlement, append-only history, idempotent commands, Arabic RTL UI, APIs, permissions, and strict SR/RG separation.
+- **Problems found:**
+  - PostgreSQL could not infer nullable `reason_code` and `reason_text` parameter types.
+  - Polymorphic `jsonb_build_object` calls also contained untyped text and UUID parameters.
+  - JSON strings passed directly to inferred `jsonb` parameters were stored as wrapped JSON scalar values, breaking canonical replay comparison.
+  - The initial suite did not explicitly prove late-failure transaction rollback or multi-user creator/reviewer/approver separation.
+- **Repairs completed:**
+  - Added explicit safe `text`, `uuid`, and `bigint` casts at affected query boundaries.
+  - Changed serialized JSON parameters to explicit `text::jsonb` parsing for create replay, command replay/storage, and audit values.
+  - Added permanent JSONB object-shape and strict replay regression coverage.
+  - Added a late audit-write failure test proving full rollback of state, command, event, and audit writes.
+  - Added a PostgreSQL integrity test proving independent creator, reviewer, and approver enforcement in `MULTI_USER` mode.
+  - Removed all temporary diagnostic and autofix machinery and restored canonical CI to read-only repository permissions.
+- **Checks passed on the validated HEAD:** clean `npm ci`; Node runtime consistency; migration sequence; Cloudflare configuration; ESLint; TypeScript 7; TypeScript 6 compatibility; unit tests; all migrations on a fresh PostgreSQL database; PostgreSQL integrity tests; PostgreSQL repository integration tests; replay and different-payload rejection; concurrency; exactly-once settlement; SR/RG isolation; rollback; multi-user separation; Next.js production build; Cloudflare Worker build; CodeQL; and Secret Scan.
+- **Review state:** no submitted reviews, no open review threads, no PR comments, no known blocking defect, and the PR is mergeable.
+- **Remaining:** re-run all required checks on the documentation-only resulting HEAD, mark PR `#50` ready, merge with expected-head protection, verify the merge commit on `main`, then start cash custody and daily closing.
+- **Next exact step:** validate the final documentation HEAD and merge PR `#50` only if every required workflow remains green.
+- **External blockers:** none.
