@@ -180,7 +180,7 @@ export async function createReconciliationPostgres(
         ) VALUES (
           $1::uuid, $2::uuid, $3::uuid, $4,
           $5, $6, $7, $8::date,
-          $9::bigint, $10::bigint, $11, $12,
+          $9::bigint, $10::bigint, $11::text, $12::text,
           $13::uuid, $13::uuid, $14
         )
         ON CONFLICT (idempotency_key) DO NOTHING
@@ -408,7 +408,7 @@ export async function settleReconciliationPostgres(
           (now() AT TIME ZONE 'Asia/Aden')::date,
           $7, 'RECONCILIATION', $8, $9,
           now(), $10::uuid, $11::uuid,
-          jsonb_build_object('reconciliationId', $8, 'settlementId', $12)
+          jsonb_build_object('reconciliationId', $8::text, 'settlementId', $12::uuid)
         )
       `,
       [
@@ -750,7 +750,7 @@ async function insertAudit(
         $1::uuid, 'USER', $2, 'RECONCILIATION', $3,
         $4::uuid, $5, $6::inet, $7, $8,
         $9::jsonb, $10::jsonb, 'SUCCESS',
-        jsonb_build_object('idempotencyKey', $11)
+        jsonb_build_object('idempotencyKey', $11::text)
       )
     `,
     [
