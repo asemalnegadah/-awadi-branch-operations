@@ -64,9 +64,11 @@
 - **Verified HEAD before this progress update:** `2656d2d48f5f1dc7fcc94045aa310ec661172d64`
 - **Completed verification:** PR is open, draft, mergeable, has no submitted reviews, no unresolved review threads, and no PR comments.
 - **Checks on verified HEAD:** Secret Scan passed; Static and unit checks passed; CodeQL passed; main CI failed only at PostgreSQL Repository Integration Tests. Clean dependency installation, Node runtime consistency, migration sequence, Cloudflare configuration, ESLint, TypeScript 7, TypeScript 6 compatibility, unit tests, all PostgreSQL migrations, and PostgreSQL integrity tests passed before the failure.
-- **First actual failure:** all three reconciliation repository integration tests fail while creating a reconciliation with nullable `reason_code` and `reason_text`; PostgreSQL reports `could not determine data type of parameter $11`.
-- **Root cause:** nullable create parameters `$11` and `$12` are untyped in the `INSERT INTO reconciliation_cases` statement.
-- **Fix in progress:** trigger the existing exact one-time branch autofix to apply `$11::text` and `$12::text`, then re-run the full CI set on the resulting HEAD.
-- **Remaining:** verify the generated commit, remove the temporary autofix workflow, complete full green CI and builds, perform final self-review, mark PR ready, merge with expected-head protection, verify `main`, and continue with cash custody and daily closing.
-- **Next exact step:** confirm that the branch autofix creates the typed SQL commit, then inspect the new HEAD and CI results only.
+- **First actual failure:** all three reconciliation repository integration tests fail while creating a reconciliation; PostgreSQL reports `could not determine data type of parameter $11`.
+- **Initial localization:** nullable `reason_code` and `reason_text` parameters were untyped in the reconciliation insert.
+- **Completed root-cause review:** polymorphic `jsonb_build_object` calls also contained untyped metadata parameters in audit and settlement inserts, so fixing only the nullable reason fields would have exposed later failures.
+- **Repair commit:** `38127d4133ae5091647fe3dd4f319e47f6b62e8d` adds explicit `text` and `uuid` casts at all three affected query sites and removes all temporary export/autofix machinery.
+- **Workflow hygiene:** canonical CI is restored with read-only repository contents permission.
+- **Remaining:** run every required check on a normal owner-authored HEAD, inspect final review state, mark PR ready, merge with expected-head protection, verify `main`, and continue with cash custody and daily closing.
+- **Next exact step:** validate the complete CI, build, security, and PostgreSQL suite on the next HEAD only.
 - **External blockers:** none currently.
