@@ -1,9 +1,13 @@
 name: Reconciliation null-cast one-time autofix
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/reconciliation-engine
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
 
 permissions:
   contents: write
