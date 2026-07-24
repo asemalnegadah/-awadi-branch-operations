@@ -1,0 +1,54 @@
+name: Reconciliation JSONB canonicalization repair
+
+on:
+  push:
+    branches:
+      - feature/reconciliation-engine
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reconciliation branch
+        uses: actions/checkout@v7
+        with:
+          ref: feature/reconciliation-engine
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply exact JSONB parameter serialization repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/lib/reconciliations/postgres-repository.ts')
+          text = path.read_text(encoding='utf-8')
+          replacements = (
+              ('create_payload = $2::jsonb', 'create_payload = $2::text::jsonb'),
+              ('canonical_payload = $2::jsonb', 'canonical_payload = $2::text::jsonb'),
+              ('$3::jsonb, $4, $5::uuid', '$3::text::jsonb, $4, $5::uuid'),
+              ('$9::jsonb, $10::jsonb', '$9::text::jsonb, $10::text::jsonb'),
+          )
+          for before, after in replacements:
+              count = text.count(before)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match for {before!r}, found {count}')
+              text = text.replace(before, after, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f src/lib/reconciliations/postgres-reconciliation-payload-diagnostic.integration.test.ts
+          rm -f .github/workflows/reconciliation-jsonb-canonicalization-fix.yml
+
+      - name: Commit canonical JSONB repair and cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(reconciliations): preserve canonical JSONB object payloads"
+          git push origin HEAD:feature/reconciliation-engine
