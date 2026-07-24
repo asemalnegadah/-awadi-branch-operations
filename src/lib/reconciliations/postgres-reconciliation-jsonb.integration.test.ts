@@ -28,10 +28,13 @@ const actor: AuthenticatedUser = {
   mustChangePassword: false,
 };
 
-function commandContext(key: string): ReconciliationCommandContext {
+function commandContext(
+  key: string,
+  ipAddress = "127.0.0.1",
+): ReconciliationCommandContext {
   const request: RequestSecurityContext = {
     requestId: randomUUID(),
-    ipAddress: "127.0.0.1",
+    ipAddress,
     userAgent: "vitest-reconciliation-jsonb",
   };
   return {
@@ -125,5 +128,61 @@ describe("PostgreSQL reconciliation canonical JSONB regression", () => {
       new_type: "object",
       metadata_type: "object",
     });
+  });
+
+  it("rolls back the state, command, event, and audit when a late audit write fails", async () => {
+    const created = await createReconciliationPostgres(
+      sql,
+      {
+        customerAccountId: accountId,
+        sourceKind: "IMPORT_TO_LEDGER",
+        sourceType: "ROLLBACK_REGRESSION",
+        sourceId: `ROLLBACK-${runKey}`,
+        cutoffDate: "2026-07-24",
+        expectedAmountMinor: 30_000,
+        observedAmountMinor: 31_000,
+      },
+      commandContext("rollback-create"),
+    );
+
+    await expect(submitReconciliationPostgres(
+      sql,
+      created.reconciliation.id,
+      { version: created.reconciliation.version },
+      commandContext("rollback-submit", "not-an-ip-address"),
+    )).rejects.toBeDefined();
+
+    const cases = await sql<{
+      state: string;
+      version: number;
+    }[]>`
+      SELECT state, version
+      FROM reconciliation_cases
+      WHERE id = ${created.reconciliation.id}
+    `;
+    expect(cases[0]).toEqual({ state: "DRAFT", version: 1 });
+
+    const commandCounts = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM reconciliation_commands
+      WHERE reconciliation_id = ${created.reconciliation.id}
+    `;
+    expect(commandCounts[0]?.count).toBe(0);
+
+    const eventCounts = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM reconciliation_events
+      WHERE reconciliation_id = ${created.reconciliation.id}
+    `;
+    expect(eventCounts[0]?.count).toBe(1);
+
+    const auditCounts = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM audit_logs
+      WHERE resource_type = 'RECONCILIATION'
+        AND resource_id = ${created.reconciliation.id}
+        AND action = 'reconciliations.submit'
+    `;
+    expect(auditCounts[0]?.count).toBe(0);
   });
 });
